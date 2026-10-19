@@ -11,8 +11,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -28,15 +28,14 @@ jobs:
       run:
         working-directory: web-mobile/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web-mobile/web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npx expo export --platform android
       - run: npm run build
 
   mobile:
@@ -45,11 +44,12 @@ jobs:
       run:
         working-directory: web-mobile/mobile
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web-mobile/mobile/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npx expo export --platform android
