@@ -14,7 +14,7 @@ A Persian, right-to-left property discovery and recommendation platform designed
 
 - Web app: [https://khane-yab-web.pages.dev](https://khane-yab-web.pages.dev)
 - API health: [https://real-estate-platform-api.m-abner-9907.workers.dev/health](https://real-estate-platform-api.m-abner-9907.workers.dev/health)
-- API data: Cloudflare D1 database `khane-yab-platform`; migrations `0001_initial.sql` and `0002_demo_listings.sql` are applied remotely.
+- API data: Cloudflare D1 database `khane-yab-platform`; migrations `0001_initial.sql`, `0002_demo_listings.sql`, and `0003_align_demo_seed.sql` are applied remotely.
 
 The web app and API have been deployed and smoke-tested. Demo listings are seeded and clearly marked as demo data. The protected manual-import endpoints remain disabled until `ADMIN_INGEST_TOKEN` is configured as a Cloudflare Worker secret; configure it before importing authorized external data.
 
