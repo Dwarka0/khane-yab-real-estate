@@ -60,7 +60,8 @@ Scores are normalized to 0–100 using only preference dimensions supplied by th
 ## Operational notes
 
 - CORS uses the comma-separated `ALLOWED_ORIGINS` environment variable. Set it to the exact production frontend origins before deployment; do not use `*` for a production deployment.
-- Rate limiting uses D1 minute buckets keyed by Cloudflare's client IP header. This is a simple service limit, not a substitute for stronger edge controls under high traffic.
+- Rate limiting uses an atomic D1 upsert keyed by Cloudflare's client IP header and opportunistically removes old buckets. The same configured per-minute limit currently applies to public and admin routes; this is a basic service limit, not a substitute for stricter admin-specific limits or edge controls under high traffic.
+- Manual import bodies are limited to 1 MiB and preference bodies to 16 KiB. Import URLs must use HTTPS. Public listing responses omit internal content hashes and precise street/coordinate fields.
 - Duplicate detection uses `(source, source_listing_id)` where supplied, otherwise a SHA-256 fingerprint of normalized listing attributes. Similar listings with changed prices or titles may need a future review queue for fuzzy matching.
 - `last_seen_at` is refreshed when an adapter sees a listing again. Freshness filtering uses that timestamp.
 - Before production, add user authentication and ownership authorization for preference endpoints, configure exact CORS origins, and review applicable privacy/retention requirements.

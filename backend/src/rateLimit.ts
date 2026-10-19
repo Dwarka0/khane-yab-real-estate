@@ -7,10 +7,17 @@ export async function rateLimit(c: Context<{ Bindings: Env }>, next: Next) {
   const windowStart = Math.floor(Date.now() / 60_000);
   const key = forwarded;
   try {
-    const row = await c.env.DB.prepare("SELECT window_start, request_count FROM rate_limit_buckets WHERE bucket_key = ?").bind(key).first<{window_start:number;request_count:number}>();
-    if (row?.window_start === windowStart && row.request_count >= limit) return c.json({ error: { code: "RATE_LIMITED", message: "Too many requests" } }, 429);
-    await c.env.DB.prepare(`INSERT INTO rate_limit_buckets(bucket_key, window_start, request_count) VALUES(?, ?, 1)
-      ON CONFLICT(bucket_key) DO UPDATE SET request_count = CASE WHEN window_start = excluded.window_start THEN request_count + 1 ELSE 1 END, window_start = excluded.window_start`).bind(key, windowStart).run();
+    // Increment and return the bucket atomically; SELECT-then-UPSERT lets concurrent
+    // requests all observe a below-limit count and pass together.
+    const row = await c.env.DB.prepare(`INSERT INTO rate_limit_buckets(bucket_key, window_start, request_count) VALUES(?, ?, 1)
+      ON CONFLICT(bucket_key) DO UPDATE SET request_count = CASE WHEN window_start = excluded.window_start THEN request_count + 1 ELSE 1 END, window_start = excluded.window_start
+      RETURNING window_start, request_count`).bind(key, windowStart).first<{window_start:number;request_count:number}>();
+    if (!row || row.window_start !== windowStart) throw new Error("Rate limiter returned an invalid bucket");
+    if (row.request_count > limit) return c.json({ error: { code: "RATE_LIMITED", message: "Too many requests" } }, 429);
+    // Opportunistic bounded cleanup prevents one permanent D1 row per historical IP.
+    if (row.request_count === 1 && windowStart % 10 === 0) {
+      await c.env.DB.prepare("DELETE FROM rate_limit_buckets WHERE window_start < ?").bind(windowStart - 10).run();
+    }
   } catch {
     // Fail closed if the limiter cannot consult D1; protects the API during database faults.
     return c.json({ error: { code: "RATE_LIMIT_UNAVAILABLE", message: "Request limiter temporarily unavailable" } }, 503);

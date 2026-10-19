@@ -17,7 +17,7 @@ export default function App() {
   const [neighborhood, setNeighborhood] = useState('همه‌ی محله‌ها');
   const [budget, setBudget] = useState(9_000_000_000);
   const [area, setArea] = useState(90);
-  const [rooms, setRooms] = useState('۲ اتاق');
+  const [rooms, setRooms] = useState('2 اتاق');
   const [apiResults, setApiResults] = useState<Listing[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
@@ -25,7 +25,7 @@ export default function App() {
   const [showFilters, setShowFilters] = useState(true);
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '');
 
-  const results = useMemo(() => (apiResults ?? demo).filter((x) => x.kind === kind && x.price <= budget && x.area >= area && (neighborhood === 'همه‌ی محله‌ها' || x.neighborhood === neighborhood)).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)), [apiResults, kind, budget, area, neighborhood]);
+  const results = useMemo(() => (apiResults ?? demo).filter((x) => x.kind === kind && x.city === city && x.price <= budget && x.area >= area && x.rooms >= Number.parseInt(rooms, 10) && (neighborhood === 'همه‌ی محله‌ها' || x.neighborhood === neighborhood)).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)), [apiResults, kind, city, budget, area, rooms, neighborhood]);
   useEffect(() => { document.documentElement.lang = 'fa'; document.documentElement.dir = 'rtl'; }, []);
 
   async function findHomes() {

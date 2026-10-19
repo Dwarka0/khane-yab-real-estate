@@ -22,7 +22,7 @@ export const preferencesSchema = z.object({
 export const listingSchema = z.object({
   source: z.string().trim().min(1).max(80),
   sourceListingId: z.string().trim().min(1).max(160).optional(),
-  sourceUrl: z.string().url().max(2048).optional(),
+  sourceUrl: z.string().url().max(2048).refine(value => new URL(value).protocol === "https:", { message: "sourceUrl must use HTTPS" }).optional(),
   title: z.string().trim().min(1).max(240),
   description: z.string().max(10000).default(""),
   city: z.string().trim().min(1).max(120),

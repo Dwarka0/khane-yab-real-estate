@@ -3,6 +3,7 @@ import { normalizeListing, isFresh, freshnessScore, hashListing } from "../src/l
 import { isEligibleListing, scoreListing } from "../src/scoring";
 import { listingSchema, preferencesSchema } from "../src/validation";
 import { importListings } from "../src/ingestion";
+import { rateLimit } from "../src/rateLimit";
 import type { Env } from "../src/types";
 
 const sample = { source:" Demo ", title:"  Bright   Apartment ", description:"", city:" تهران ", propertyType:"Apartment", transactionType:"buy" as const, price:100, areaM2:80, bedrooms:2, features:["Parking","parking"] };
@@ -29,6 +30,7 @@ describe("validation and explainable scoring", () => {
   it("rejects unsafe or malformed listing input", () => {
     expect(listingSchema.safeParse({...sample,price:-1}).success).toBe(false);
     expect(listingSchema.safeParse({...sample,latitude:120}).success).toBe(false);
+    expect(listingSchema.safeParse({...sample,sourceUrl:"http://example.com/listing"}).success).toBe(false);
   });
   it("explains matching preferences and produces bounded score", () => {
     const result = scoreListing({...sample,source:"demo",city:"Tehran",propertyType:"apartment",features:["parking"]}, {
@@ -84,6 +86,30 @@ describe("validation and explainable scoring", () => {
 });
 
 describe("failure-safe ingestion", () => {
+  it("skips duplicate source IDs within one import before the D1 batch", async () => {
+    const writes: string[] = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(..._values: unknown[]) { return this; },
+          async first() { return null; },
+          async run() { return { success: true }; },
+          sql,
+        };
+      },
+      async batch(statements: Array<{sql?: string}>) { writes.push(...statements.map(s => s.sql ?? "")); return []; },
+    } as unknown as D1Database;
+    const env = { DB: db } as Env;
+    const base = { source:"manual", sourceListingId:"same-source-id", title:"First title", city:"Tehran", propertyType:"apartment", transactionType:"buy" as const, price:100, features:[] };
+
+    const result = await importListings(env, "manual", [base, { ...base, title:"Second title", price:120 }]);
+
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(writes.filter(sql => sql.includes("INSERT INTO listings"))).toHaveLength(1);
+    expect(writes.some(sql => sql.includes("status='completed'"))).toBe(true);
+  });
+
   it("marks the run failed with a sanitized message when the transactional D1 batch fails", async () => {
     const statements: string[] = [];
     const db = {
@@ -106,5 +132,24 @@ describe("failure-safe ingestion", () => {
 
     expect(statements.some(sql => sql.includes("status='failed'") && sql.includes("message='Import failed; listing changes were rolled back'"))).toBe(true);
     expect(statements.some(sql => sql.includes("status='completed'"))).toBe(true);
+  });
+});
+
+describe("atomic rate limiting", () => {
+  it("rejects a request based on the atomically returned incremented count", async () => {
+    let sql = "";
+    let continued = false;
+    const db = { prepare(statement: string) { sql = statement; return { bind() { return this; }, async first() { return { window_start: Math.floor(Date.now() / 60_000), request_count: 11 }; } }; } } as unknown as D1Database;
+    const context = {
+      env: { DB: db, RATE_LIMIT_PER_MINUTE: "10" },
+      req: { header: () => "192.0.2.10" },
+      json: (payload: unknown, status: number) => ({ payload, status }),
+    } as unknown as Parameters<typeof rateLimit>[0];
+
+    const response = await rateLimit(context, async () => { continued = true; });
+
+    expect(sql).toContain("RETURNING window_start, request_count");
+    expect(response).toMatchObject({ status: 429 });
+    expect(continued).toBe(false);
   });
 });

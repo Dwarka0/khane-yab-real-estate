@@ -107,15 +107,17 @@ Help a person describe a property need, discover relevant real-estate listings, 
 
 ## Requirements traceability matrix
 
-| Requirement | Design/diagram | Verification |
-|---|---|---|
-| FR-01, FR-02 | Search API; component and sequence diagrams | TC-API-01 through TC-API-04 |
-| FR-03, FR-05, FR-07 | Listing/observation model; state and ERD diagrams | TC-DATA-01 through TC-DATA-04 |
-| FR-04 | Recommendation service and scoring contract | TC-REC-01 through TC-REC-05 |
-| FR-06 | Dedupe workflow and source observations | TC-ING-03, TC-ING-04 |
-| FR-08, FR-09 | Manual import and demo adapter | TC-ING-01, TC-ING-02, TC-ING-05 |
-| FR-10, FR-11 | Adapter registry and ingestion run model | TC-SEC-04, TC-ING-06 |
-| FR-12, NFR-06, NFR-07 | RTL web/mobile component | TC-UI-01 through TC-UI-06 |
-| FR-13, NFR-01 | API boundary and rate limiter | TC-SEC-01 through TC-SEC-05 |
-| FR-14, NFR-02 | Retention/deletion policy | TC-SEC-06 |
-| NFR-03, NFR-04, NFR-09, NFR-10 | Cloudflare deployment and observability | TC-OPS-01 through TC-OPS-05 |
+| Requirement | Design/diagram | Verification | Implementation status at current baseline |
+|---|---|---|---|
+| FR-01, FR-02 | Search API; component and sequence diagrams | TC-API-01 through TC-API-04 | **Partial:** validated filters and recommendations exist; automated API integration tests, full pagination metadata, and all boundary cases are not yet covered. |
+| FR-03, FR-05, FR-07 | Listing/observation model; state and ERD diagrams | TC-DATA-01 through TC-DATA-04 | **Partial:** source, `last_seen_at`, and null numeric values exist; separate observation/provenance records and user-visible stale-state handling are not implemented. Stale listings are currently filtered out. |
+| FR-04 | Recommendation service and scoring contract | TC-REC-01 through TC-REC-05 | **Partial:** explainable scores/reasons and hard eligibility filters exist; reason coverage and ordering are unit-tested, but deployed end-to-end acceptance fixtures are not comprehensive. |
+| FR-06 | Dedupe workflow and source observations | TC-ING-03, TC-ING-04 | **Partial:** source ID/content-hash dedupe exists, including duplicate rows within one batch; cross-source observations and fuzzy-match review are absent. |
+| FR-08, FR-09 | Manual import and demo adapter | TC-ING-01, TC-ING-02, TC-ING-05 | **Partial:** token-protected JSON import and demo fixtures exist; byte-size validation and transactional rollback are implemented, but row-level diagnostics and a dedicated operator UI are absent. |
+| FR-10, FR-11 | Adapter registry and ingestion run model | TC-SEC-04, TC-ING-06 | **Not implemented:** no source adapter registry/permission records or API/UI for reviewing ingestion runs; external adapters remain disabled and no Divar/Sheypoor connection is present. |
+| FR-12, NFR-06, NFR-07 | RTL web/mobile component | TC-UI-01 through TC-UI-06 | **Partial:** Persian RTL responsive clients and loading/empty/error messages exist; keyboard, screen-reader, contrast, viewport, and device acceptance checks have not been fully run. |
+| FR-13, NFR-01 | API boundary and rate limiter | TC-SEC-01 through TC-SEC-05 | **Partial:** validation, admin-token import protection, CORS, and atomic IP rate-limit buckets exist; preference routes have no identity/ownership checks and the same per-minute limit is applied across public and admin routes. |
+| FR-14, NFR-02 | Retention/deletion policy | TC-SEC-06 | **Not implemented:** no listing/observation retention or deletion workflow is present. Preference IDs are anonymous client-generated capabilities and should not be treated as private authenticated accounts. |
+| NFR-03, NFR-04, NFR-09, NFR-10 | Cloudflare deployment and observability | TC-OPS-01 through TC-OPS-05 | **Partial:** Worker/D1 deploy and basic health smoke check exist; representative p95 load measurements, robust metrics/request IDs, backup/restore rehearsal, and scheduled cleanup are not demonstrated. |
+
+The test IDs above describe planned acceptance tests, not proof that every case has been executed. The current automated backend suite contains focused unit tests; see `test-plan.md` and the current release report for the checks actually run. Diagram definitions in `diagrams.md` are target-state unless explicitly marked current-state; they must not be interpreted as proof that every depicted entity or service is implemented.

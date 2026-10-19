@@ -10,12 +10,25 @@ export async function importListings(env: Env, adapter: "manual" | "demo", rawIt
   let inserted = 0, updated = 0, skipped = 0;
   try {
     const writes: D1PreparedStatement[] = [];
+    const seenSourceIds = new Set<string>();
+    const seenContentHashes = new Set<string>();
     for (const raw of rawItems) {
       const parsed = listingSchema.safeParse(raw);
       if (!parsed.success) { skipped++; continue; }
       const item: ListingInput = normalizeListing(parsed.data);
       const id = crypto.randomUUID();
       const contentHash = await hashListing(item);
+      const sourceKey = item.sourceListingId ? `${item.source}\u0000${item.sourceListingId}` : undefined;
+      // Rows in this same import are not visible to the database dedupe queries
+      // until the final transactional batch executes. Reject repeats here so a
+      // duplicate cannot violate UNIQUE(source, source_listing_id) and roll back
+      // otherwise valid rows from the whole import.
+      if ((sourceKey && seenSourceIds.has(sourceKey)) || seenContentHashes.has(contentHash)) {
+        skipped++;
+        continue;
+      }
+      if (sourceKey) seenSourceIds.add(sourceKey);
+      seenContentHashes.add(contentHash);
       const existingBySource = item.sourceListingId
         ? await env.DB.prepare("SELECT id FROM listings WHERE source = ? AND source_listing_id = ?").bind(item.source, item.sourceListingId).first<{id:string}>()
         : null;

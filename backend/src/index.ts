@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 import type { Env } from "./types";
 import { preferencesSchema, searchSchema } from "./validation";
 import { rateLimit } from "./rateLimit";
@@ -17,8 +19,14 @@ app.use("/api/*", cors({
   allowHeaders: ["Content-Type", "Authorization"],
 }));
 app.use("/api/*", rateLimit);
+app.use("/api/preferences/*", bodyLimit({ maxSize: 16 * 1024 }));
+app.use("/api/ingest/manual", bodyLimit({ maxSize: 1_048_576 }));
 
 app.onError((error, c) => {
+  if (error instanceof HTTPException) {
+    const tooLarge = error.status === 413;
+    return c.json({ error: { code: tooLarge ? "PAYLOAD_TOO_LARGE" : "HTTP_ERROR", message: tooLarge ? "حجم درخواست بیشتر از حد مجاز است" : "درخواست قابل پردازش نیست" } }, error.status);
+  }
   console.error("api_error", { path: c.req.path, message: error.message });
   return c.json({ error: { code: "INTERNAL_ERROR", message: "درخواست با خطا مواجه شد" } }, 500);
 });
@@ -56,10 +64,18 @@ app.get("/api/listings", async c => {
   if (p.maxPrice !== undefined) { where.push("price <= ?"); values.push(p.maxPrice); }
   if (p.minAreaM2 !== undefined) { where.push("area_m2 >= ?"); values.push(p.minAreaM2); }
   if (p.minBedrooms !== undefined) { where.push("bedrooms >= ?"); values.push(p.minBedrooms); }
-  if (p.q) { where.push("(title LIKE ? OR description LIKE ? OR neighborhood LIKE ?)"); const q = `%${p.q.replace(/[\\%_]/g, "\\$&")}%`; values.push(q,q,q); }
+  if (p.q) { where.push("(title LIKE ? ESCAPE char(92) OR description LIKE ? ESCAPE char(92) OR neighborhood LIKE ? ESCAPE char(92))"); const q = `%${p.q.replace(/[\\%_]/g, "\\$&")}%`; values.push(q,q,q); }
   const result = await c.env.DB.prepare(`SELECT * FROM listings WHERE ${where.join(" AND ")} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?`).bind(...values,p.limit,p.offset).all<Record<string,unknown>>();
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
-  const listings = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({ ...r, features:JSON.parse(String(r.features)), freshnessScore:freshnessScore(String(r.last_seen_at)) }));
+  const listings = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
+    id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url),
+    title:String(r.title), description:String(r.description), city:String(r.city),
+    neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type),
+    transactionType:String(r.transaction_type), price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2),
+    bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms),
+    features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at),
+    last_seen_at:String(r.last_seen_at), freshnessScore:freshnessScore(String(r.last_seen_at)),
+  }));
   return c.json({ items:listings, limit:p.limit, offset:p.offset, count:listings.length });
 });
 
@@ -71,7 +87,7 @@ app.post("/api/recommendations/:preferenceId", async c => {
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
   const items = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
     row: r,
-    listing: { ...r, source:String(r.source), sourceListingId:r.source_listing_id == null ? undefined : String(r.source_listing_id), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), features:JSON.parse(String(r.features)) as string[] },
+    listing: { id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms), features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at), last_seen_at:String(r.last_seen_at) },
   })).filter(({ listing }) => isEligibleListing(listing,prefs)).map(({ row, listing }) => ({
     ...scoreListing(listing,prefs), freshness:freshnessScore(String(row.last_seen_at)),
   })).sort((a,b) => b.score - a.score || b.freshness - a.freshness).slice(0,50);
@@ -80,10 +96,16 @@ app.post("/api/recommendations/:preferenceId", async c => {
 
 app.post("/api/ingest/manual", async c => {
   if (!c.env.ADMIN_INGEST_TOKEN || c.req.header("Authorization") !== `Bearer ${c.env.ADMIN_INGEST_TOKEN}`) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
-  const body = await c.req.json().catch(() => null);
-  if (!body || !Array.isArray(body.listings)) return c.json({error:{code:"VALIDATION_ERROR",message:"فیلد listings باید آرایه باشد"}},400);
+  const contentLength = Number(c.req.header("Content-Length") ?? 0);
+  if (contentLength > 1_048_576) return c.json({error:{code:"PAYLOAD_TOO_LARGE",message:"حجم درخواست بیشتر از حد مجاز است"}},413);
+  const rawBody = await c.req.text();
+  if (new TextEncoder().encode(rawBody).byteLength > 1_048_576) return c.json({error:{code:"PAYLOAD_TOO_LARGE",message:"حجم درخواست بیشتر از حد مجاز است"}},413);
+  let body: unknown = null;
+  try { body = JSON.parse(rawBody); } catch { /* handled by validation response below */ }
+  if (!body || typeof body !== "object" || !("listings" in body) || !Array.isArray(body.listings)) return c.json({error:{code:"VALIDATION_ERROR",message:"فیلد listings باید آرایه باشد"}},400);
+  if (body.listings.length > 100) return c.json({error:{code:"VALIDATION_ERROR",message:"حداکثر ۱۰۰ آگهی در هر درخواست مجاز است"}},400);
   try { return c.json(await importListings(c.env,"manual",body.listings)); }
-  catch (error) { return c.json({error:{code:"INGEST_FAILED",message:error instanceof Error ? error.message : "Import failed"}},400); }
+  catch { return c.json({error:{code:"INGEST_FAILED",message:"ورود آگهی‌ها انجام نشد؛ وضعیت پایگاه داده را بررسی کنید"}},500); }
 });
 
 app.post("/api/ingest/demo", async c => {
