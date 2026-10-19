@@ -19,7 +19,6 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npx expo export --platform android
       - run: npm test
       - run: npm audit --audit-level=moderate
 
@@ -37,6 +36,7 @@ jobs:
           cache-dependency-path: web-mobile/web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npx expo export --platform android
       - run: npm run build
 
   mobile:
