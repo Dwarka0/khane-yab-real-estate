@@ -28,7 +28,7 @@ Help a person describe a property need, discover relevant real-estate listings, 
 
 - The user interface and user-facing copy are Persian and use RTL direction by default; numeric identifiers and technical tokens may retain their natural direction.
 - Cloudflare Workers provides the API/runtime layer and D1 is the initial relational store. Static web assets can be hosted through Cloudflare; object storage is optional and should be introduced only for a demonstrated need.
-- The API contract in `architecture-api-data.md` is the target contract. Existing implementation details have not been verified by this documentation task.
+- The current API implementation is described in `architecture-api-data.md` and deployed as a Cloudflare Worker. Its public preference IDs still lack authenticated ownership, and the rental price model remains a documented release limitation; the architecture document distinguishes implemented behavior from future production requirements.
 - Imported listing data can be incomplete, duplicated, stale, misleading, or malformed.
 - Source permissions vary. Each adapter requires a documented authorization record and an explicit enablement decision.
 - No production secrets or personal data are required in demo fixtures.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeListing, isFresh, freshnessScore, hashListing } from "../src/listings";
-import { scoreListing } from "../src/scoring";
+import { isEligibleListing, scoreListing } from "../src/scoring";
 import { listingSchema, preferencesSchema } from "../src/validation";
 import { importListings } from "../src/ingestion";
 import type { Env } from "../src/types";
@@ -36,6 +36,50 @@ describe("validation and explainable scoring", () => {
     });
     expect(result.score).toBe(100);
     expect(result.reasons.length).toBeGreaterThan(1);
+  });
+
+  it("applies every hard constraint before scoring and compares text case-insensitively", () => {
+    const prefs = {
+      transactionType:"buy" as const, city:"TEHRAN", budgetMin:80, budgetMax:150,
+      propertyTypes:["APARTMENT"], neighborhoods:["SAADAT ABAD"], minBedrooms:2, minAreaM2:75,
+      mustHave:["PARKING", "ELEVATOR"], avoid:["auction"],
+    };
+    const eligible = { ...sample, city:"tehran", neighborhood:"Saadat Abad", propertyType:"Apartment", transactionType:"buy" as const,
+      price:100, areaM2:80, bedrooms:2, title:"Bright home", description:"Well maintained", features:["parking", "Elevator"] };
+
+    expect(isEligibleListing(eligible, prefs)).toBe(true);
+    const incompatible = [
+      { label:"transaction type", listing:{ ...eligible, transactionType:"rent" as const } },
+      { label:"specified city", listing:{ ...eligible, city:"Karaj" } },
+      { label:"minimum budget", listing:{ ...eligible, price:79 } },
+      { label:"maximum budget", listing:{ ...eligible, price:151 } },
+      { label:"specified property type", listing:{ ...eligible, propertyType:"Villa" } },
+      { label:"minimum bedrooms", listing:{ ...eligible, bedrooms:1 } },
+      { label:"missing bedroom data", listing:{ ...eligible, bedrooms:undefined } },
+      { label:"minimum area", listing:{ ...eligible, areaM2:74 } },
+      { label:"missing area data", listing:{ ...eligible, areaM2:undefined } },
+      { label:"specified neighborhood", listing:{ ...eligible, neighborhood:"Narmak" } },
+      { label:"missing required feature", listing:{ ...eligible, features:["parking"] } },
+      { label:"avoided term in title", listing:{ ...eligible, title:"AUCTION listing" } },
+      { label:"avoided term in description", listing:{ ...eligible, description:"Auction only" } },
+      { label:"avoided term in feature", listing:{ ...eligible, features:["parking", "elevator", "AUCTION"] } },
+    ];
+
+    for (const testCase of incompatible) {
+      expect(isEligibleListing(testCase.listing, prefs), `${testCase.label} must be excluded`).toBe(false);
+    }
+  });
+
+  it("keeps the existing scoring function and ranking order for eligible listings", () => {
+    const prefs = { transactionType:"buy" as const, city:"Tehran", propertyTypes:[], neighborhoods:[], mustHave:[], avoid:[] };
+    const first = { ...sample, city:"TEHRAN", transactionType:"buy" as const, features:["parking"] };
+    const second = { ...sample, city:"Tehran", transactionType:"buy" as const, features:[] };
+    const eligible = [first, second].filter(listing => isEligibleListing(listing,prefs));
+    const ranked = eligible.map(listing => scoreListing(listing,prefs)).sort((a,b) => b.score-a.score);
+    expect(ranked).toHaveLength(2);
+    expect(ranked[0]!.score).toBe(scoreListing(first,prefs).score);
+    expect(ranked[1]!.score).toBe(scoreListing(second,prefs).score);
+    expect(ranked[0]!.listing).toBe(first);
   });
 });
 

@@ -2,6 +2,26 @@ import type { ListingInput, Preferences } from "./types";
 
 export interface ScoredListing<T extends ListingInput> { listing: T; score: number; reasons: string[] }
 
+const normalized = (value: string) => value.trim().toLocaleLowerCase();
+
+/** Hard eligibility constraints are applied before scoring so incompatible listings can never be recommended. */
+export function isEligibleListing<T extends ListingInput>(listing: T, prefs: Preferences): boolean {
+  if (normalized(listing.transactionType) !== normalized(prefs.transactionType)) return false;
+  if (prefs.city && normalized(listing.city) !== normalized(prefs.city)) return false;
+  if (prefs.budgetMin !== undefined && listing.price < prefs.budgetMin) return false;
+  if (prefs.budgetMax !== undefined && listing.price > prefs.budgetMax) return false;
+  if (prefs.propertyTypes.length && !prefs.propertyTypes.some(type => normalized(type) === normalized(listing.propertyType))) return false;
+  if (prefs.minBedrooms !== undefined && (listing.bedrooms === undefined || listing.bedrooms < prefs.minBedrooms)) return false;
+  if (prefs.minAreaM2 !== undefined && (listing.areaM2 === undefined || listing.areaM2 < prefs.minAreaM2)) return false;
+  if (prefs.neighborhoods.length && (!listing.neighborhood || !prefs.neighborhoods.some(n => normalized(n) === normalized(listing.neighborhood!)))) return false;
+  if (prefs.mustHave.length && !prefs.mustHave.every(required => listing.features.some(feature => normalized(feature) === normalized(required)))) return false;
+  if (prefs.avoid.length) {
+    const searchableText = normalized(`${listing.title} ${listing.description ?? ""} ${listing.features.join(" ")}`);
+    if (prefs.avoid.some(term => searchableText.includes(normalized(term)))) return false;
+  }
+  return true;
+}
+
 export function scoreListing<T extends ListingInput>(listing: T, prefs: Preferences): ScoredListing<T> {
   let earned = 0;
   let possible = 0;

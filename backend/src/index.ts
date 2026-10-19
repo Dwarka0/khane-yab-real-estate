@@ -4,7 +4,7 @@ import type { Env } from "./types";
 import { preferencesSchema, searchSchema } from "./validation";
 import { rateLimit } from "./rateLimit";
 import { demoListings, importListings } from "./ingestion";
-import { scoreListing } from "./scoring";
+import { isEligibleListing, scoreListing } from "./scoring";
 import { freshnessScore, isFresh } from "./listings";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -69,10 +69,12 @@ app.post("/api/recommendations/:preferenceId", async c => {
   const prefs = { budgetMin: row.budget_min == null ? undefined : Number(row.budget_min), budgetMax: row.budget_max == null ? undefined : Number(row.budget_max), propertyTypes:JSON.parse(String(row.property_types)) as string[], transactionType:row.transaction_type as "buy"|"rent", city:row.city == null ? undefined : String(row.city), neighborhoods:JSON.parse(String(row.neighborhoods)) as string[], minBedrooms:row.min_bedrooms == null ? undefined : Number(row.min_bedrooms), minAreaM2:row.min_area_m2 == null ? undefined : Number(row.min_area_m2), maxCommuteMinutes:row.max_commute_minutes == null ? undefined : Number(row.max_commute_minutes), mustHave:JSON.parse(String(row.must_have)) as string[], avoid:JSON.parse(String(row.avoid)) as string[] };
   const result = await c.env.DB.prepare("SELECT * FROM listings WHERE status='active' AND transaction_type=? ORDER BY last_seen_at DESC LIMIT 500").bind(prefs.transactionType).all<Record<string,unknown>>();
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
-  const items = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => {
-    const listing = { ...r, source:String(r.source), sourceListingId:r.source_listing_id == null ? undefined : String(r.source_listing_id), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), features:JSON.parse(String(r.features)) as string[] };
-    return { ...scoreListing(listing,prefs), freshness:freshnessScore(String(r.last_seen_at)) };
-  }).sort((a,b) => b.score - a.score || b.freshness - a.freshness).slice(0,50);
+  const items = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
+    row: r,
+    listing: { ...r, source:String(r.source), sourceListingId:r.source_listing_id == null ? undefined : String(r.source_listing_id), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), features:JSON.parse(String(r.features)) as string[] },
+  })).filter(({ listing }) => isEligibleListing(listing,prefs)).map(({ row, listing }) => ({
+    ...scoreListing(listing,prefs), freshness:freshnessScore(String(row.last_seen_at)),
+  })).sort((a,b) => b.score - a.score || b.freshness - a.freshness).slice(0,50);
   return c.json({ preferenceId:c.req.param("preferenceId"), scoring:{ version:1, weights:"Configured by available preferences; score normalized to 0-100" }, items });
 });
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View, Linking, ActivityIndicator } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import * as Crypto from 'expo-crypto';
 
 type HomeItem = { id: string; title: string; city: string; neighborhood: string; price: number; area: number; rooms: number; score: number; source: string; url?: string; reasons?: string[]; verified?: boolean };
 const demo: HomeItem[] = [
@@ -18,8 +19,8 @@ export default function App() {
   async function search() {
     setLoading(true); const base = process.env.EXPO_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
     if (base) {
-      try { const id = `mobile-${Date.now().toString(36)}`; const p = await fetch(`${base}/api/preferences/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactionType: 'buy', city: 'تهران', budgetMax: Number(budget), minAreaM2: Number(area), minBedrooms: 2, propertyTypes: ['apartment'], neighborhoods: [], mustHave: [], avoid: [] }) }); if (!p.ok) throw new Error('preference save failed'); const r = await fetch(`${base}/api/recommendations/${id}`, { method: 'POST' }); if (!r.ok) throw new Error('request failed'); const data = await r.json() as { items?: Array<{ listing: { id: string; title: string; city: string; neighborhood?: string; price: number; areaM2?: number; bedrooms?: number; source: string; sourceUrl?: string; transactionType: 'buy' | 'rent' }; score: number; reasons: string[] }> }; setResults((data.items ?? []).map(({ listing, score, reasons }) => ({ id: listing.id, title: listing.title, city: listing.city, neighborhood: listing.neighborhood ?? 'محله ثبت نشده', price: listing.price, area: listing.areaM2 ?? 0, rooms: listing.bedrooms ?? 0, score, source: listing.source, url: listing.sourceUrl, reasons }))); setMessage('نتایج سرویس دریافت شد؛ وضعیت هر آگهی را از منبع بررسی کنید.'); }
-      catch { setResults(demo); setMessage('سرویس در دسترس نیست؛ نمونه‌های نمایشی نمایش داده می‌شوند.'); }
+      try { const id = `mobile-${Crypto.randomUUID()}`; const p = await fetch(`${base}/api/preferences/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactionType: 'buy', city: 'تهران', budgetMax: Number(budget), minAreaM2: Number(area), minBedrooms: 2, propertyTypes: ['apartment'], neighborhoods: [], mustHave: [], avoid: [] }) }); if (!p.ok) throw new Error('preference save failed'); const r = await fetch(`${base}/api/recommendations/${id}`, { method: 'POST' }); if (!r.ok) throw new Error('request failed'); const data = await r.json() as { items?: Array<{ listing: { id: string; title: string; city: string; neighborhood?: string; price: number; areaM2?: number; bedrooms?: number; source: string; sourceUrl?: string; transactionType: 'buy' | 'rent' }; score: number; reasons: string[] }> }; setResults((data.items ?? []).map(({ listing, score, reasons }) => ({ id: listing.id, title: listing.title, city: listing.city, neighborhood: listing.neighborhood ?? 'محله ثبت نشده', price: listing.price, area: listing.areaM2 ?? 0, rooms: listing.bedrooms ?? 0, score, source: listing.source, url: listing.sourceUrl, reasons }))); setMessage('نتایج سرویس دریافت شد؛ وضعیت هر آگهی را از منبع بررسی کنید.'); }
+      catch { setResults(demo.filter((item) => item.price <= Number(budget) && item.area >= Number(area))); setMessage('ارتباط با سرویس برقرار نشد؛ فقط نمونه‌های نمایشی مطابق بودجه و متراژ فعلی نمایش داده می‌شوند.'); }
     } else { setResults(demo.filter((x) => x.price <= Number(budget) && x.area >= Number(area))); setMessage('نتایج نمایشی هستند و آگهی واقعی محسوب نمی‌شوند.'); }
     setLoading(false);
   }
