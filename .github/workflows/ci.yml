@@ -55,7 +55,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run assets:generate
+      - run: npm run assets:web
       - run: npx expo export --platform android
+      - name: Export the installable web build
+        run: npm run export:web
+        env:
+          EXPO_PUBLIC_API_BASE_URL: https://real-estate-platform-api.m-abner-9907.workers.dev
       - name: Report known Expo/Metro advisories
         run: npm audit --audit-level=high
         continue-on-error: true

@@ -6,13 +6,14 @@ A Persian, right-to-left property discovery and recommendation platform designed
 
 - `backend/`: Cloudflare Worker API, D1 schema, listing normalization, a source registry with a fail-closed permission gate, provenance observations, and explainable recommendations (see `backend/README.md`).
 - `web-mobile/web/`: responsive Persian RTL web interface, including a panel for submitting a listing link.
-- `web-mobile/mobile/`: Expo/React Native mobile application source, including the same link-submission panel.
+- `web-mobile/mobile/`: Expo/React Native mobile application source, including the same link-submission panel. The same source builds an installable web app that is published on Cloudflare Pages.
 - `docs/`: requirements, traceability, architecture, use-case descriptions, UML/data-flow/schedule diagrams, and verification plans.
 - Public source repository: [github.com/Dwarka0/khane-yab-real-estate](https://github.com/Dwarka0/khane-yab-real-estate) (MIT licence).
 
 ## Deployed web and API
 
 - Web app: [https://khane-yab-web.pages.dev](https://khane-yab-web.pages.dev)
+- Mobile app (installable web build): [https://khane-yab-mobile.pages.dev](https://khane-yab-mobile.pages.dev)
 - API health: [https://real-estate-platform-api.m-abner-9907.workers.dev/health](https://real-estate-platform-api.m-abner-9907.workers.dev/health)
 - API data: Cloudflare D1 database `khane-yab-platform`; migrations `0001_initial.sql` through `0005_sources_observations.sql` are applied remotely.
 
