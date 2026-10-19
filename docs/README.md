@@ -10,6 +10,7 @@ This documentation defines a reviewable baseline for a Persian, right-to-left re
 - [System diagrams](diagrams.md) — Mermaid context, use case, activity, class, domain model, sequence, state, component, package, deployment, ERD, data-flow, ingestion, recommendation, and schedule diagrams.
 - [Test plan](test-plan.md) — test levels, fixtures, cases, and exit criteria.
 - [Review plan](review-plan.md) — review gates and release-readiness checklist.
+- [Release report](release-report.md) — the checks that were actually executed, the measured performance, and the accepted risks.
 
 ## Status and interpretation
 

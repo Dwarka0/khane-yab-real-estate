@@ -192,9 +192,11 @@ export class FakeDatabase {
     }
     const limitMatch = /LIMIT (\?|\d+)/i.exec(sql);
     if (limitMatch) {
-      const limit = limitMatch[1] === "?" ? Number(values[values.length - 1]) : Number(limitMatch[1]);
       const offsetMatch = /OFFSET (\?|\d+)/i.exec(sql);
-      const offset = offsetMatch ? (offsetMatch[1] === "?" ? Number(values[values.length - 2]) : Number(offsetMatch[1])) : 0;
+      // LIMIT and OFFSET are bound last, in that order.
+      const boundTail = [limitMatch[1] === "?" ? Number(values[values.length - (offsetMatch ? 2 : 1)]) : Number(limitMatch[1])];
+      const limit = boundTail[0]!;
+      const offset = offsetMatch ? (offsetMatch[1] === "?" ? Number(values[values.length - 1]) : Number(offsetMatch[1])) : 0;
       return filtered.slice(offset, offset + limit);
     }
     return filtered;

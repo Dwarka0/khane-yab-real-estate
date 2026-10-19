@@ -1,5 +1,9 @@
 # Engineering review and release-readiness plan
 
+## Status of the current release
+
+The recorded outcome of the release review is `docs/release-report.md`. It lists the checks that were actually executed, the measured performance numbers, the accepted risks with their owners, and the checks that were **not** executed. The checkboxes below are the reviewer's working list; they are only ticked when a human reviewer confirms them. The following gates are covered by automated evidence in the release report: gate 2 (ingestion bounds, dedupe idempotency, transactional rollback, sanitized diagnostics), gate 3 (validation, allowlisted filters, stable envelopes, rate limits, CORS restriction, migrations, freshness and retention policy), and parts of gate 6 (Worker bindings, sanitized failure categories, smoke checks). Still open: the manual keyboard and screen-reader review of gate 5, the request-id metric of gate 6, and the backup rehearsal.
+
 ## Review approach
 
 Review each change against requirements and the traceability matrix in `requirements.md`. Review source code, configuration, migrations, UI behavior, and operational documentation together when a change crosses boundaries. The review should establish what the application actually does; this document describes intended behavior and must not be treated as implementation evidence.

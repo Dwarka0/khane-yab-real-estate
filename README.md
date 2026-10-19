@@ -46,7 +46,7 @@ The live target uses Cloudflare Pages for `web-mobile/web/` and a separate Worke
 
 ## GitHub and mobile release
 
-The repository is published under the MIT licence (see `LICENSE`). The licence covers the source code only: listing content stays with its publisher, every result shows its source and its original link, and no third-party listing text, logo, or trademark is redistributed as an owned asset. Mobile store publication additionally requires the final application identifier, store accounts, privacy policy, signing credentials, and store review; this repository alone does not constitute a published app.
+The repository is published under the MIT licence (see `LICENSE`). The licence covers the source code only: listing content stays with its publisher, every result shows its source and its original link, and no third-party listing text, logo, or trademark is redistributed as an owned asset. The privacy notice is `PRIVACY.md`, and the executed release checks are recorded in `docs/release-report.md`. Mobile store publication additionally requires the final application identifier, store accounts, privacy policy, signing credentials, and store review; this repository alone does not constitute a published app. The installable mobile build and the download page are published on Cloudflare Pages at `https://khane-yab-mobile.pages.dev` and `https://khane-yab-web.pages.dev/download.html`.
 
 ## Known pre-release limitations
 

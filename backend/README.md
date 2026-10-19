@@ -37,6 +37,7 @@ JSON responses use UTF-8. Errors have `{ "error": { "code": "...", "message": ".
 | `GET /api/listings` | Filter active, fresh listings |
 | `POST /api/recommendations/:preferenceId` | Return ranked listings with score and Persian explanation reasons |
 | `POST /api/listings/import-link` | Import one listing page the user submitted (bounded fetch, allowlisted host) |
+| `DELETE /api/listings/:id` | Withdraw a listing, or purge it with `?purge=true`; requires the admin token |
 | `POST /api/ingest/manual` | Import up to 100 caller-provided listings; requires `Authorization: Bearer <ADMIN_INGEST_TOKEN>` |
 | `POST /api/ingest/demo` | Import built-in sample listings; requires the same admin token |
 | `GET /api/ingest/runs` | Recent ingestion runs (admin token) |
@@ -83,10 +84,16 @@ All preference fields are optional; lists default to empty and `transactionType`
 
 ### Scoring
 
-Scores are normalized to 0–100 using only preference dimensions supplied by the user: transaction type (24), city (18), neighborhood (12), property type (10), budget (16), bedrooms (8), area (6), must-have features (6), and avoiding unwanted terms (20). Since the score is normalized by the sum of enabled dimensions, users can omit any dimension. Reasons explain each matched criterion. Freshness is exposed separately and used as a tie-breaker, followed by the listing id so the order is deterministic. `maxCommuteMinutes` is stored for contract stability but has no effect until reliable travel-time data is configured.
+Scores are normalized to 0–100 using only preference dimensions supplied by the user: transaction type (24), city (18), neighborhood (12), property type (10), budget (16), bedrooms (8), area (6), must-have features (6), and avoiding unwanted terms (20). Since the score is normalized by the sum of enabled dimensions, users can omit any dimension. Every result carries stable reason codes — `TRANSACTION_MATCH`, `LOCATION_MATCH`, `NEIGHBORHOOD_MATCH`, `PROPERTY_TYPE_MATCH`, `WITHIN_BUDGET`, `ROOMS_MATCH`, `AREA_MATCH`, `FEATURES_MATCH`, `PREFERENCE_MATCH`, `MISSING_KEY_FIELDS`, `STALE_LISTING` — together with a Persian label for each code, so a client can localize the wording without an API change. Freshness is exposed separately and used as a tie-breaker, followed by the listing id so the order is deterministic. `maxCommuteMinutes` is stored for contract stability but has no effect until reliable travel-time data is configured.
+
+### Stale records
+
+Listings older than `MAX_LISTING_AGE_DAYS` (default 90) are no longer hidden. They are returned with `stale: true`, a `freshnessScore` of 0, and the `STALE_LISTING` reason, and the clients label them «قدیمی». A stale record is a listing that has not been observed recently; it is never presented as confirmed available.
 
 ## Operational notes
 
+- Every response carries an `X-Request-Id` header, and every error envelope carries the same value in `error.requestId`, so a user report can be correlated with the server log. The identifier is the Cloudflare Ray id when the edge supplies one.
+- The operator routes (`/api/ingest/*`, `/api/maintenance/cleanup`, `DELETE /api/listings/:id`) require `Authorization: Bearer <ADMIN_INGEST_TOKEN>`. Configure it as a Cloudflare Worker secret (`npx wrangler secret put ADMIN_INGEST_TOKEN`); never commit it. The local value is kept in `backend/.admin-token.local`, which the repository ignores.
 - CORS uses the comma-separated `ALLOWED_ORIGINS` environment variable. Set it to the exact production frontend origins before deployment; do not use `*` for a production deployment.
 - Rate limiting uses an atomic D1 upsert keyed by Cloudflare's client IP header and opportunistically removes old buckets. The same configured per-minute limit currently applies to public and admin routes; this is a basic service limit, not a substitute for stricter admin-specific limits or edge controls under high traffic.
 - Manual import bodies are limited to 1 MiB, preference bodies to 16 KiB, and link-import bodies to 8 KiB. Import URLs must use HTTPS. Public listing responses omit internal content hashes and precise street/coordinate fields.

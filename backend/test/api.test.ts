@@ -172,8 +172,112 @@ describe("user-submitted listing link", () => {
   });
 });
 
-describe("operator run review and maintenance", () => {
-  it("protects the run review routes and shows row-level diagnostics", async () => {
+describe("stale records, request ids, and listing removal", () => {
+  const staleListing = {
+    id: "stale-001", source: "demo", source_listing_id: "stale-001", source_url: null,
+    title: "آپارتمان قدیمی", description: "", city: "تهران", neighborhood: "نارمک",
+    property_type: "apartment", transaction_type: "buy", price: 5000000000, sale_price: 5000000000,
+    monthly_rent: null, deposit: null, area_m2: 80, bedrooms: 2, bathrooms: 1, latitude: null, longitude: null,
+    features: "[]", published_at: null, first_seen_at: "2020-01-01 00:00:00",
+    last_seen_at: "2020-01-01 00:00:00", content_hash: "hash-stale", status: "active",
+  };
+
+  it("returns a stale listing but marks it, and explains it in the reasons", async () => {
+    const db = new FakeDatabase({ listings: [staleListing] });
+    const env = fakeEnv(db, { MAX_LISTING_AGE_DAYS: "90" });
+    const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    await app.request(`/api/preferences/${id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactionType: "buy", city: "تهران", budgetMax: 9000000000, minAreaM2: 60, minBedrooms: 1, propertyTypes: ["apartment"], neighborhoods: [], mustHave: [], avoid: [] }),
+    }, env);
+
+    const recommendations = await app.request(`/api/recommendations/${id}`, { method: "POST" }, env);
+    const payload = await recommendations.json() as { items: { reasons: string[]; reasonLabels: string[]; listing: { stale: boolean } }[] };
+    expect(payload.items).toHaveLength(1);
+    expect(payload.items[0]!.listing.stale).toBe(true);
+    expect(payload.items[0]!.reasons).toContain("STALE_LISTING");
+    expect(payload.items[0]!.reasonLabels.length).toBe(payload.items[0]!.reasons.length);
+  });
+
+  it("reports the stale count in the listing response", async () => {
+    const db = new FakeDatabase({ listings: [staleListing] });
+    const env = fakeEnv(db);
+    const response = await app.request("/api/listings", {}, env);
+    const payload = await response.json() as { items: { stale: boolean }[]; staleCount: number };
+    expect(payload.items).toHaveLength(1);
+    expect(payload.items[0]!.stale).toBe(true);
+    expect(payload.staleCount).toBe(1);
+  });
+
+  it("returns stable reason codes with a readable label for each", async () => {
+    const db = new FakeDatabase({ listings: [{
+      id: "fresh-001", source: "demo", source_listing_id: "fresh-001", source_url: null,
+      title: "آپارتمان", description: "", city: "تهران", neighborhood: "صادقیه",
+      property_type: "apartment", transaction_type: "buy", price: 5000000000, sale_price: 5000000000,
+      monthly_rent: null, deposit: null, area_m2: 90, bedrooms: 2, bathrooms: 1, latitude: null, longitude: null,
+      features: '["parking"]', published_at: null, first_seen_at: "2099-01-01 00:00:00",
+      last_seen_at: "2099-01-01 00:00:00", content_hash: "hash-fresh", status: "active",
+    }] });
+    const env = fakeEnv(db);
+    const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    await app.request(`/api/preferences/${id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactionType: "buy", city: "تهران", budgetMax: 9000000000, minAreaM2: 60, minBedrooms: 1, propertyTypes: ["apartment"], neighborhoods: [], mustHave: ["parking"], avoid: [] }),
+    }, env);
+
+    const response = await app.request(`/api/recommendations/${id}`, { method: "POST" }, env);
+    const payload = await response.json() as { items: { reasons: string[]; reasonLabels: string[] }[] };
+    const reasons = payload.items[0]!.reasons;
+    expect(reasons).toContain("TRANSACTION_MATCH");
+    expect(reasons).toContain("LOCATION_MATCH");
+    expect(reasons).toContain("WITHIN_BUDGET");
+    expect(reasons).toContain("AREA_MATCH");
+    expect(reasons).toContain("ROOMS_MATCH");
+    expect(reasons).toContain("FEATURES_MATCH");
+    expect(reasons).not.toContain("MISSING_KEY_FIELDS");
+    expect(payload.items[0]!.reasonLabels.every((label) => label.length > 0)).toBe(true);
+  });
+
+  it("adds a request id to every response and to the error envelope", async () => {
+    const db = new FakeDatabase();
+    const env = fakeEnv(db);
+    const response = await app.request("/api/listings?limit=9999", {}, env);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("X-Request-Id")).toBeTruthy();
+    const payload = await response.json() as { error: { code: string; requestId: string } };
+    expect(payload.error.requestId).toBeTruthy();
+    expect(payload.error.requestId).toBe(response.headers.get("X-Request-Id"));
+  });
+
+  it("withdraws a listing by default and purges it on request", async () => {
+    const db = new FakeDatabase({ listings: [{
+      id: "l-1", source: "demo", source_listing_id: "l-1", source_url: null, title: "آگهی", description: "",
+      city: "تهران", neighborhood: null, property_type: "apartment", transaction_type: "buy", price: 1, sale_price: 1,
+      monthly_rent: null, deposit: null, area_m2: null, bedrooms: null, bathrooms: null, latitude: null, longitude: null,
+      features: "[]", published_at: null, first_seen_at: "2026-10-19 00:00:00", last_seen_at: "2026-10-19 00:00:00",
+      content_hash: "hash-1", status: "active",
+    }] });
+    const env = fakeEnv(db, { ADMIN_INGEST_TOKEN: "secret-token" });
+
+    expect((await app.request("/api/listings/l-1", { method: "DELETE" }, env)).status).toBe(401);
+
+    const withdraw = await app.request("/api/listings/l-1", {
+      method: "DELETE", headers: { "Content-Type": "application/json", Authorization: "Bearer secret-token" },
+      body: JSON.stringify({ reason: "owner withdrew the listing" }),
+    }, env);
+    expect(withdraw.status).toBe(200);
+    expect(db.listings[0]!.status).toBe("removed");
+
+    const purge = await app.request("/api/listings/l-1?purge=true", {
+      method: "DELETE", headers: { "Content-Type": "application/json", Authorization: "Bearer secret-token" },
+      body: JSON.stringify({ reason: "retention policy" }),
+    }, env);
+    expect(purge.status).toBe(200);
+    expect(db.listings).toHaveLength(0);
+  });
+});
+
+describe("operator run review and maintenance", () => {  it("protects the run review routes and shows row-level diagnostics", async () => {
     const db = new FakeDatabase({ sources: [USER_LINK_SOURCE, {
       id: "src-manual", name: "ورود دستی اپراتور", kind: "manual", base_url: null, allowed_host: null,
       enabled: 1, permission_status: "approved", permission_reviewed_at: "2026-01-01 00:00:00", permission_notes: "test",

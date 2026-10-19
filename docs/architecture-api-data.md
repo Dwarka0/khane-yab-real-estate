@@ -41,7 +41,7 @@ The web and mobile clients are now aligned with the backend recommendation flow:
 - Current API paths are unversioned (`/api/...`); introduce `/api/v1` only as a deliberate migration rather than assuming it already exists.
 - JSON UTF-8; use ISO 8601 timestamps in UTC with a `Z` suffix.
 - Validate all inputs on the server. Apply explicit maximum lengths, enum allowlists, numeric bounds, and bounded pagination.
-- Success responses use resource-specific shapes. Errors use `{ "error": { "code": "...", "message": "...", "requestId": "...", "details": [] } }`; details must not disclose secrets or internal stack traces.
+- Success responses use resource-specific shapes. Errors use `{ "error": { "code": "...", "message": "...", "requestId": "...", "details": [] } }`; details must not disclose secrets or internal stack traces. Every response also carries an `X-Request-Id` header with the same value, so a user report can be correlated with the server log.
 - Use stable error codes, not localized message strings, for client branching. User-facing Persian copy belongs in the client.
 - Public read endpoints have rate limits. Import and operator endpoints require authentication/authorization and stricter rate limits.
 - CORS should allow only configured production origins. Do not use wildcard origins with credentialed requests.
@@ -55,8 +55,9 @@ The web and mobile clients are now aligned with the backend recommendation flow:
 | `GET /api/sources` | Approved and enabled data sources | None | `{ items: [{ id, name, kind }] }` | `429` |
 | `GET /api/sources/:id/permission` | Authorization state of one source | Source id in path | `{ allowed, source }` | `429` |
 | `PUT /api/preferences/{id}` | Create anonymous search preferences | UUIDv4 path ID and validated preferences JSON | `{ id, preferences, expiresAt }` | `400 INVALID_ID` or `VALIDATION_ERROR`; `409 PREFERENCE_ID_ALREADY_USED` |
-| `GET /api/listings` | Filter active and fresh listings | `q`, `city`, `transactionType`, `propertyType`, `minPrice`, `maxPrice`, `minAreaM2`, `minBedrooms`, `limit`, `offset` | `{ items, limit, offset, count, total, hasMore }` | `400 VALIDATION_ERROR`, `429` |
-| `POST /api/recommendations/{id}` | Rank fresh listings for saved preferences | Preference ID in path; preferences must exist | `{ items: [{ listing, score, reasons, freshness }], total, limit, offset, hasMore }` | `404 PREFERENCES_NOT_FOUND`, `429` |
+| `GET /api/listings` | Filter active listings | `q`, `city`, `transactionType`, `propertyType`, `minPrice`, `maxPrice`, `minAreaM2`, `minBedrooms`, `limit`, `offset` | `{ items, limit, offset, count, staleCount, total, hasMore }` | `400 VALIDATION_ERROR`, `429` |
+| `POST /api/recommendations/{id}` | Rank listings for saved preferences | Preference ID in path; preferences must exist | `{ items: [{ listing, score, reasons, reasonLabels, freshness }], total, limit, offset, hasMore }` | `404 PREFERENCES_NOT_FOUND`, `429` |
+| `DELETE /api/listings/{id}` | Withdraw or purge a listing | Admin token; `?purge=true` deletes the record and its observations | `{ id, action, reason, runId }` | `401 UNAUTHORIZED`, `404 LISTING_NOT_FOUND` |
 | `POST /api/listings/import-link` | Import one listing page the user submitted | `{ url }` | `201` created / `200` updated with `{ listing, created, source }` | `400 VALIDATION_ERROR` or `INVALID_SOURCE_URL`; `403` permission gate; `413` body limit; `422 LISTING_EXTRACT_FAILED`; `429`; `502 SOURCE_FETCH_FAILED` |
 | `POST /api/ingest/manual` | Import caller-provided listing records | `{ listings: [...] }`, bearer admin token | Import run counts | `400 VALIDATION_ERROR` / `INGEST_FAILED`, `401 UNAUTHORIZED`, `403` permission gate, `429` |
 | `POST /api/ingest/demo` | Import built-in demo fixtures | Bearer admin token | Import run counts | `401 UNAUTHORIZED`, `403` permission gate, `429` |
@@ -122,7 +123,7 @@ The API retains the legacy integer `price` field for compatibility and now also 
 
 1. Apply hard filters first: intent, allowed property type, city/area constraints, and explicit minimum/maximum limits.
 2. Compute a bounded score from only fields available for that listing. Missing values contribute no positive match and are labelled unknown; they must not be treated as a match.
-3. Return stable reason codes and client-localized labels. Example codes: `WITHIN_BUDGET`, `AREA_MATCH`, `ROOMS_MATCH`, `LOCATION_MATCH`, `PREFERENCE_MATCH`, `MISSING_KEY_FIELDS`, `STALE_LISTING`.
+3. Return stable reason codes and client-localized labels. The implemented codes are `TRANSACTION_MATCH`, `LOCATION_MATCH`, `NEIGHBORHOOD_MATCH`, `PROPERTY_TYPE_MATCH`, `WITHIN_BUDGET`, `ROOMS_MATCH`, `AREA_MATCH`, `FEATURES_MATCH`, `PREFERENCE_MATCH`, `MISSING_KEY_FIELDS`, and `STALE_LISTING`. The API returns the codes together with a Persian label for each, and the clients keep their own map so the wording can change without a backend release.
 4. Apply a deterministic tie-breaker such as `score DESC`, `lastSeenAt DESC`, then canonical `id ASC`.
 5. Never present score as a probability of suitability or a guarantee. Expose the main matching factors and allow users to revise criteria.
 6. Keep ranking weights in one documented configuration and cover them with fixed fixtures. Changes to weights require regression tests and a review note.
