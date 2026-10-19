@@ -35,21 +35,19 @@ app.get("/health", c => c.json({ status: "ok", service: "real-estate-platform-ap
 
 app.put("/api/preferences/:id", async c => {
   const id = c.req.param("id").trim();
-  if (!/^[\w-]{1,80}$/.test(id)) return c.json({ error: { code:"INVALID_ID", message:"شناسه نامعتبر است" } }, 400);
+  // Preference IDs are short-lived, anonymous bearer capabilities generated with
+  // crypto.randomUUID() by the clients. Requiring UUIDv4 prevents caller-chosen
+  // predictable identifiers; insert-only semantics prevent replacement by ID.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return c.json({ error: { code:"INVALID_ID", message:"شناسه نامعتبر است" } }, 400);
   const body = await c.req.json().catch(() => null);
   const parsed = preferencesSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: { code:"VALIDATION_ERROR", message:"اطلاعات ترجیحات معتبر نیست", details:parsed.error.flatten() } }, 400);
   const p = parsed.data;
-  await c.env.DB.prepare(`INSERT INTO user_preferences(id,budget_min,budget_max,property_types,transaction_type,city,neighborhoods,min_bedrooms,min_area_m2,max_commute_minutes,must_have,avoid,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET budget_min=excluded.budget_min,budget_max=excluded.budget_max,property_types=excluded.property_types,transaction_type=excluded.transaction_type,city=excluded.city,neighborhoods=excluded.neighborhoods,min_bedrooms=excluded.min_bedrooms,min_area_m2=excluded.min_area_m2,max_commute_minutes=excluded.max_commute_minutes,must_have=excluded.must_have,avoid=excluded.avoid,updated_at=CURRENT_TIMESTAMP`)
+  const saved = await c.env.DB.prepare(`INSERT INTO user_preferences(id,budget_min,budget_max,property_types,transaction_type,city,neighborhoods,min_bedrooms,min_area_m2,max_commute_minutes,must_have,avoid,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING`)
     .bind(id,p.budgetMin ?? null,p.budgetMax ?? null,JSON.stringify(p.propertyTypes),p.transactionType,p.city ?? null,JSON.stringify(p.neighborhoods),p.minBedrooms ?? null,p.minAreaM2 ?? null,p.maxCommuteMinutes ?? null,JSON.stringify(p.mustHave),JSON.stringify(p.avoid)).run();
+  if (saved.meta.changes === 0) return c.json({ error: { code:"PREFERENCE_ID_ALREADY_USED", message:"این شناسه قبلاً استفاده شده است؛ جست‌وجوی تازه‌ای آغاز کنید" } }, 409);
   return c.json({ id, preferences:p });
-});
-
-app.get("/api/preferences/:id", async c => {
-  const row = await c.env.DB.prepare("SELECT * FROM user_preferences WHERE id=?").bind(c.req.param("id")).first<Record<string, unknown>>();
-  if (!row) return c.json({ error:{code:"NOT_FOUND",message:"ترجیحات پیدا نشد"} },404);
-  return c.json({ id:row.id, budgetMin:row.budget_min, budgetMax:row.budget_max, propertyTypes:JSON.parse(String(row.property_types)), transactionType:row.transaction_type, city:row.city, neighborhoods:JSON.parse(String(row.neighborhoods)), minBedrooms:row.min_bedrooms, minAreaM2:row.min_area_m2, maxCommuteMinutes:row.max_commute_minutes, mustHave:JSON.parse(String(row.must_have)), avoid:JSON.parse(String(row.avoid)) });
 });
 
 app.get("/api/listings", async c => {

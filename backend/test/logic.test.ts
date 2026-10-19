@@ -4,6 +4,7 @@ import { isEligibleListing, scoreListing } from "../src/scoring";
 import { listingSchema, preferencesSchema } from "../src/validation";
 import { importListings } from "../src/ingestion";
 import { rateLimit } from "../src/rateLimit";
+import app from "../src/index";
 import type { Env } from "../src/types";
 
 const sample = { source:" Demo ", title:"  Bright   Apartment ", description:"", city:" تهران ", propertyType:"Apartment", transactionType:"buy" as const, price:100, areaM2:80, bedrooms:2, features:["Parking","parking"] };
@@ -151,5 +152,40 @@ describe("atomic rate limiting", () => {
     expect(sql).toContain("RETURNING window_start, request_count");
     expect(response).toMatchObject({ status: 429 });
     expect(continued).toBe(false);
+  });
+});
+
+describe("anonymous preference capabilities", () => {
+  it("requires UUIDv4 IDs, prevents overwriting a used ID, and does not expose a preference GET route", async () => {
+    let bucketCount = 0;
+    let preferenceCreated = false;
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(..._values: unknown[]) { return this; },
+          async first() {
+            if (sql.includes("RETURNING window_start, request_count")) return { window_start: Math.floor(Date.now() / 60_000), request_count: ++bucketCount };
+            return null;
+          },
+          async run() {
+            if (sql.includes("INSERT INTO user_preferences")) {
+              if (preferenceCreated) return { meta: { changes: 0 } };
+              preferenceCreated = true;
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 1 } };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const env = { DB: db, RATE_LIMIT_PER_MINUTE: "60", ALLOWED_ORIGINS: "http://localhost:5173" } as Env;
+    const invalid = await app.request("/api/preferences/predictable-id", { method:"PUT", headers:{"Content-Type":"application/json"}, body:"{}" }, env);
+    expect(invalid.status).toBe(400);
+
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const create = () => app.request(`/api/preferences/${id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:"{}" }, env);
+    expect((await create()).status).toBe(200);
+    expect((await create()).status).toBe(409);
+    expect((await app.request(`/api/preferences/${id}`, {}, env)).status).toBe(404);
   });
 });

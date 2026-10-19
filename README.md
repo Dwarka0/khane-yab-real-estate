@@ -33,7 +33,7 @@ Never commit API keys, Cloudflare credentials, `.dev.vars`, signing keys, or pro
 
 ## Cloudflare deployment
 
-The live target uses Cloudflare Pages for `web-mobile/web/` and a separate Worker/D1 API. See `backend/README.md`, `web-mobile/web/README.md`, and `docs/architecture-api-data.md` for setup and deployment instructions. The current API has anonymous preference IDs without authenticated ownership; do not use them for sensitive profiles until authentication/ownership is implemented. The current schema stores one integer `price` per listing; represent monthly rent and deposit separately before treating rental recommendations as production-ready.
+The live target uses Cloudflare Pages for `web-mobile/web/` and a separate Worker/D1 API. See `backend/README.md`, `web-mobile/web/README.md`, and `docs/architecture-api-data.md` for setup and deployment instructions. The current API uses insert-only UUIDv4 capability IDs for anonymous, non-sensitive search sessions; it has no account authentication or durable private profiles. Add authenticated ownership before supporting those features. The current schema stores one integer `price` per listing; represent monthly rent and deposit separately before treating rental recommendations as production-ready.
 
 ## GitHub and mobile release
 

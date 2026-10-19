@@ -6,7 +6,7 @@ The architecture separates the Persian RTL clients, API/application services, pe
 
 ### Implementation baseline and client integration status
 
-The current backend exposes `GET /health`, `PUT/GET /api/preferences/:id`, `GET /api/listings`, `POST /api/recommendations/:preferenceId`, `POST /api/ingest/manual`, and `POST /api/ingest/demo`. It stores preferences in `user_preferences`, listings in `listings`, rate-limit buckets in `rate_limit_buckets`, and run summaries in `ingestion_runs`. The `sources` and `listing_observations` entities below are target-design recommendations for stronger provenance; they are not represented in the initial migration.
+The current backend exposes `GET /health`, `PUT /api/preferences/:id`, `GET /api/listings`, `POST /api/recommendations/:preferenceId`, `POST /api/ingest/manual`, and `POST /api/ingest/demo`. It stores preferences in `user_preferences`, listings in `listings`, rate-limit buckets in `rate_limit_buckets`, and run summaries in `ingestion_runs`. Preference IDs are UUIDv4 anonymous capabilities; creation is insert-only and there is no preference GET route. This is suitable only for non-sensitive search sessions, not private accounts. The `sources` and `listing_observations` entities below are target-design recommendations for stronger provenance; they are not represented in the initial migration.
 
 The web and mobile clients are now aligned with the backend recommendation flow: save preferences with `PUT /api/preferences/:id`, then call `POST /api/recommendations/:id` using that preference ID. The recommendation response is `{ "items": [{ "listing": ..., "score": ..., "reasons": [...] }] }`. This closes the previously documented client/backend route-shape mismatch. Keep a contract test covering both steps and the response envelope so future client or backend changes do not silently diverge.
 
@@ -50,14 +50,13 @@ The web and mobile clients are now aligned with the backend recommendation flow:
 | Method and path | Purpose | Input | Success | Main errors |
 |---|---|---|---|---|
 | `GET /health` | Minimal liveness check | None | `{ status, service }` | `500` on uncaught error |
-| `PUT /api/preferences/{id}` | Create/replace search preferences | Validated preferences JSON | `{ id, preferences }` | `400 INVALID_ID` or `VALIDATION_ERROR`; ownership/auth checks are missing |
-| `GET /api/preferences/{id}` | Retrieve preferences | Path ID | Preference object | `404 NOT_FOUND`; ownership/auth checks are missing |
+| `PUT /api/preferences/{id}` | Create anonymous search preferences | UUIDv4 path ID and validated preferences JSON | `{ id, preferences }` | `400 INVALID_ID` or `VALIDATION_ERROR`; `409 PREFERENCE_ID_ALREADY_USED` |
 | `GET /api/listings` | Filter active and fresh listings | `q`, `city`, `transactionType`, `propertyType`, `minPrice`, `maxPrice`, `minAreaM2`, `minBedrooms`, `limit`, `offset` | `{ items, limit, offset, count }` | `400 VALIDATION_ERROR`, `429` |
 | `POST /api/recommendations/{id}` | Rank fresh listings for saved preferences | Preference ID in path; preferences must exist | `{ items: [{ listing, score, reasons }] }` | `404 PREFERENCES_NOT_FOUND`, `429` |
 | `POST /api/ingest/manual` | Import caller-provided listing records | `{ listings: [...] }`, bearer admin token | Import run counts | `400 VALIDATION_ERROR` / `INGEST_FAILED`, `401 UNAUTHORIZED`, `429` |
 | `POST /api/ingest/demo` | Import built-in demo fixtures | Bearer admin token | Import run counts | `401 UNAUTHORIZED`, `429` |
 
-The current import endpoints are privileged operations protected by `ADMIN_INGEST_TOKEN` using a bearer header. The implementation should additionally document and enforce request-size limits, stricter route-specific rate limits, and a sanitized audit policy before production. **Open security gap:** preference endpoints currently use a caller-supplied identifier without authentication or ownership checks. A caller who knows or guesses an ID may read or replace another caller's preferences. Add authenticated identity/ownership enforcement (or an explicitly designed non-sensitive, unguessable capability model) before treating preferences as private user data or exposing these endpoints to untrusted clients.
+The current import endpoints are privileged operations protected by `ADMIN_INGEST_TOKEN` using a bearer header. Request bodies have route-specific limits and rate-limit buckets are incremented atomically, but stricter admin-specific rate limits and a sanitized audit policy remain future work. Preference IDs are UUIDv4 capabilities, inserts are immutable, and the direct preference-read route is absent. This is not user authentication: use the capability flow only for non-sensitive, short-lived search sessions. Add authenticated identity/ownership enforcement before introducing accounts or private saved profiles.
 
 ### Recommendation response example
 

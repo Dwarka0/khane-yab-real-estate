@@ -32,7 +32,7 @@ export default function App() {
     setLoading(true); setNotice('');
     if (apiBase) {
       try {
-        const preferenceId = `web-${crypto.randomUUID()}`;
+        const preferenceId = crypto.randomUUID();
         const preferences = { transactionType: kind, city, neighborhoods: neighborhood === 'همه‌ی محله‌ها' ? [] : [neighborhood], budgetMax: budget, minAreaM2: area, minBedrooms: Number(rooms[0]), propertyTypes: ['apartment'] };
         const savedPreferences = await fetch(`${apiBase}/api/preferences/${preferenceId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preferences) });
         if (!savedPreferences.ok) throw new Error(`Preferences HTTP ${savedPreferences.status}`);
