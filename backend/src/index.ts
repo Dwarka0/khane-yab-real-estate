@@ -12,7 +12,7 @@ import { freshnessScore, isFresh } from "./listings";
 const app = new Hono<{ Bindings: Env }>();
 app.use("/api/*", cors({
   origin: (origin, c) => {
-    const allowed = (c.env.ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:4173").split(",").map((value: string) => value.trim()).filter(Boolean);
+    const allowed = (c.env.ALLOWED_ORIGINS ?? "").split(",").map((value: string) => value.trim()).filter(Boolean);
     return allowed.includes(origin) ? origin : "";
   },
   allowMethods: ["GET", "POST", "PUT", "OPTIONS"],
