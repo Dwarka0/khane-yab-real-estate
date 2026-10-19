@@ -1,0 +1,66 @@
+# Real Estate Platform API
+
+Cloudflare Workers API built with TypeScript, Hono, and D1. This directory is backend-only and does not modify the sibling `web-mobile/` application.
+
+## Setup
+
+1. Install Node.js 20+ and run `npm install` in this directory.
+2. `wrangler.toml` points to the deployed `khane-yab-platform` D1 database. For a separate account/environment, create a new D1 database with `npx wrangler d1 create YOUR_DATABASE_NAME` and replace the name/ID in the configuration before deploying.
+3. Apply schema with `npx wrangler d1 migrations apply khane-yab-platform --local` for local development or add `--remote` for the configured remote database.
+4. Copy `.dev.vars.example` to `.dev.vars` and set a long random `ADMIN_INGEST_TOKEN`.
+5. Run `npm run dev`; validate with `npm test` and `npm run typecheck`.
+
+Do not commit `.dev.vars`, API tokens, or real credentials. Public listing sources must only be used through officially permitted APIs, licensed exports, or manual imports. This backend contains no scraper and does not bypass login, robots rules, anti-bot checks, or other access controls.
+
+## API contract
+
+JSON responses use UTF-8. Errors have `{ "error": { "code": "...", "message": "..." } }`; validation errors may include a Zod `details` object. Prices are integer **tomans** throughout this API; ingestion adapters must convert source prices into tomans before import. The API currently uses an identifier supplied by the calling application for preference records; add authentication/ownership checks before exposing private user data to untrusted clients.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health` | Health check |
+| `PUT /api/preferences/:id` | Create or replace a user's search preferences |
+| `GET /api/preferences/:id` | Retrieve preferences |
+| `GET /api/listings` | Filter active, fresh listings |
+| `POST /api/recommendations/:preferenceId` | Return up to 50 ranked listings with score and Persian explanation reasons |
+| `POST /api/ingest/manual` | Import up to 100 caller-provided listings; requires `Authorization: Bearer <ADMIN_INGEST_TOKEN>` |
+| `POST /api/ingest/demo` | Import built-in sample listings; requires the same admin token |
+
+### Preferences JSON
+
+```json
+{
+  "budgetMin": 3000000000,
+  "budgetMax": 8000000000,
+  "propertyTypes": ["apartment"],
+  "transactionType": "buy",
+  "city": "تهران",
+  "neighborhoods": ["صادقیه"],
+  "minBedrooms": 2,
+  "minAreaM2": 80,
+  "mustHave": ["parking"],
+  "avoid": ["basement"]
+}
+```
+
+All preference fields are optional; lists default to empty and `transactionType` defaults to `buy`. `budgetMin` cannot exceed `budgetMax`.
+
+### Listing import JSON
+
+`POST /api/ingest/manual` accepts `{ "listings": [ ... ] }`. Each listing requires `source`, `title`, `city`, `propertyType`, `transactionType` (`buy` or `rent`), and non-negative `price`. Optional fields include `sourceListingId`, HTTPS `sourceUrl`, `description`, `neighborhood`, `address`, `areaM2`, `bedrooms`, `bathrooms`, coordinates, `features`, and ISO datetime `publishedAt`. Invalid rows are counted as skipped; the response reports received, inserted, updated, and skipped counts.
+
+### Search filters
+
+`GET /api/listings?q=...&city=...&transactionType=buy&propertyType=apartment&minPrice=...&maxPrice=...&minAreaM2=...&minBedrooms=...&limit=20&offset=0`. Limits are clamped by validation (`limit` 1–100, `offset` 0–10000). Freshness defaults to 90 days, configurable with `MAX_LISTING_AGE_DAYS`.
+
+### Scoring
+
+Scores are normalized to 0–100 using only preference dimensions supplied by the user: transaction type (24), city (18), neighborhood (12), property type (10), budget (16), bedrooms (8), area (6), must-have features (6), and avoiding unwanted terms (20). Since the score is normalized by the sum of enabled dimensions, users can omit any dimension. Reasons explain each matched criterion. Freshness is exposed separately and used as a tie-breaker. `maxCommuteMinutes` is stored for contract stability but has no effect until reliable travel-time data is configured.
+
+## Operational notes
+
+- CORS uses the comma-separated `ALLOWED_ORIGINS` environment variable. Set it to the exact production frontend origins before deployment; do not use `*` for a production deployment.
+- Rate limiting uses D1 minute buckets keyed by Cloudflare's client IP header. This is a simple service limit, not a substitute for stronger edge controls under high traffic.
+- Duplicate detection uses `(source, source_listing_id)` where supplied, otherwise a SHA-256 fingerprint of normalized listing attributes. Similar listings with changed prices or titles may need a future review queue for fuzzy matching.
+- `last_seen_at` is refreshed when an adapter sees a listing again. Freshness filtering uses that timestamp.
+- Before production, add user authentication and ownership authorization for preference endpoints, configure exact CORS origins, and review applicable privacy/retention requirements.

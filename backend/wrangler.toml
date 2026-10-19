@@ -1,0 +1,15 @@
+name = "real-estate-platform-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-15"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "khane-yab-platform"
+database_id = "8f599923-218f-4316-bbe4-01a76ce2cd4a"
+migrations_dir = "migrations"
+
+[vars]
+APP_ENV = "production"
+RATE_LIMIT_PER_MINUTE = "60"
+MAX_LISTING_AGE_DAYS = "90"
+ALLOWED_ORIGINS = "https://khane-yab-web.pages.dev,http://localhost:5173,http://localhost:4173"

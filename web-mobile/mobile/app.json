@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "خانه‌یاب",
+    "slug": "khane-yab",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true, "bundleIdentifier": "ir.khaneyab.app" },
+    "android": { "package": "ir.khaneyab.app", "adaptiveIcon": { "backgroundColor": "#EAF3E9" } }
+  }
+}
