@@ -8,6 +8,7 @@ A Persian, right-to-left property discovery and recommendation platform designed
 - `web-mobile/web/`: responsive Persian RTL web interface.
 - `web-mobile/mobile/`: Expo/React Native mobile application source.
 - `docs/`: requirements, traceability, architecture, UML/data-flow diagrams, and verification plans.
+- Public source repository: [github.com/Dwarka0/khane-yab-real-estate](https://github.com/Dwarka0/khane-yab-real-estate).
 
 ## Deployed web and API
 
