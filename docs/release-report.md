@@ -11,8 +11,8 @@ This report records what was actually executed for the release. A check is only 
 
 | Artefact | Address | State |
 |---|---|---|
-| Web client | https://khane-yab-web.pages.dev | deployed |
-| Mobile client (installable web build) | https://khane-yab-mobile.pages.dev | deployed |
+| Web client | https://khane-yab-web.m-abner-9907.workers.dev (mirror: https://khane-yab-web.pages.dev) | deployed |
+| Mobile client (installable web build) | https://khane-yab-mobile.m-abner-9907.workers.dev (mirror: https://khane-yab-mobile.pages.dev) | deployed |
 | API | https://real-estate-platform-api.m-abner-9907.workers.dev | deployed |
 | D1 database | `khane-yab-platform` (`8f599923-218f-4316-bbe4-01a76ce2cd4a`) | migrations `0001`–`0005` applied |
 

@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
  *  - publishes the PWA manifest and links it from the document head
  *  - adds the apple touch icon so iOS can add the app to the home screen
  */
-const dist = new URL('../dist/', import.meta.url);
+const dist = new URL('../web-dist/', import.meta.url);
 const manifestPath = new URL('manifest.webmanifest', dist);
 const indexPath = new URL('index.html', dist);
 

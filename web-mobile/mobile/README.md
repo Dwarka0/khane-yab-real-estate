@@ -14,18 +14,18 @@ Configure `EXPO_PUBLIC_API_BASE_URL` to the Worker origin. The app currently use
 
 ## Installable web build (PWA)
 
-The mobile source is exported as a single-page web app and published on Cloudflare Pages at `https://khane-yab-mobile.pages.dev`. It installs on Android and iOS home screens, updates without a store release, and talks to the same Worker API as the web client.
+The mobile source is exported as a single-page web app and published as a Cloudflare Worker with static assets at `https://khane-yab-mobile.m-abner-9907.workers.dev` (mirrored to Cloudflare Pages at `https://khane-yab-mobile.pages.dev`). It installs on Android and iOS home screens, updates without a store release, and talks to the same Worker API as the web client.
 
 ```sh
 npm install
 $env:EXPO_PUBLIC_API_BASE_URL = "https://real-estate-platform-api.m-abner-9907.workers.dev"
 npm run export:web
-npx wrangler pages deploy dist --project-name khane-yab-mobile
+npx wrangler deploy
 ```
 
 - `npm run export:web` exports with Metro, then `scripts/postprocess-web.mjs` publishes `manifest.webmanifest` and links it, the apple touch icon, and the home-screen metadata from the document head.
 - `public/sw.js` is a small app-shell service worker. It caches the shell only and never caches API responses, so listing data always comes from the live API.
-- The Worker must allow the Pages origin in `ALLOWED_ORIGINS` (`https://khane-yab-mobile.pages.dev`), otherwise the browser blocks the API calls.
+- The API Worker must allow this origin in `ALLOWED_ORIGINS` (`https://khane-yab-mobile.m-abner-9907.workers.dev`), otherwise the browser blocks the API calls.
 - `npm run configure:web` regenerates the `web` section of `app.json`; it is idempotent and the result is committed.
 
 ## Native release

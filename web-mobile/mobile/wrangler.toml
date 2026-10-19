@@ -1,0 +1,10 @@
+name = "khane-yab-mobile"
+main = "src/worker.ts"
+compatibility_date = "2026-10-19"
+
+# The installable mobile web build is published as a Worker with static
+# assets, so it is served from a workers.dev address.
+[assets]
+directory = "./web-dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"

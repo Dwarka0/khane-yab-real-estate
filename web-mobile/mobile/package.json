@@ -10,7 +10,7 @@
     "assets:generate": "node scripts/generate-assets.mjs",
     "typecheck": "tsc --noEmit",
     "web": "expo start --web",
-    "export:web": "expo export --platform web && node scripts/postprocess-web.mjs",
+    "export:web": "expo export --platform web --output-dir web-dist && node scripts/postprocess-web.mjs",
     "assets:web": "node scripts/generate-web-assets.mjs",
     "configure:web": "node scripts/configure-web.mjs"
   },
