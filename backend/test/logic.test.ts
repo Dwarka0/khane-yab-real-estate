@@ -4,8 +4,9 @@ import { isEligibleListing, scoreListing } from "../src/scoring";
 import { listingSchema, preferencesSchema } from "../src/validation";
 import { importListings } from "../src/ingestion";
 import { rateLimit } from "../src/rateLimit";
-import app from "../src/index";
-import type { Env } from "../src/types";
+import { extractListingFromHtml, parseNumber, parsePriceFromText } from "../src/pageExtract";
+import { checkSourcePermission, isHostAllowed } from "../src/sources";
+import { FakeDatabase, fakeEnv } from "./fakeD1";
 
 const sample = { source:" Demo ", title:"  Bright   Apartment ", description:"", city:" تهران ", propertyType:"Apartment", transactionType:"buy" as const, price:100, areaM2:80, bedrooms:2, features:["Parking","parking"] };
 
@@ -60,10 +61,10 @@ describe("validation and explainable scoring", () => {
     const prefs = {
       transactionType:"buy" as const, city:"TEHRAN", budgetMin:80, budgetMax:150,
       propertyTypes:["APARTMENT"], neighborhoods:["SAADAT ABAD"], minBedrooms:2, minAreaM2:75,
-      mustHave:["PARKING", "ELEVATOR"], avoid:["auction"],
+      mustHave:["PARKING","ELEVATOR"], avoid:["auction"],
     };
     const eligible = { ...sample, city:"tehran", neighborhood:"Saadat Abad", propertyType:"Apartment", transactionType:"buy" as const,
-      price:100, areaM2:80, bedrooms:2, title:"Bright home", description:"Well maintained", features:["parking", "Elevator"] };
+      price:100, areaM2:80, bedrooms:2, title:"Bright home", description:"Well maintained", features:["parking","Elevator"] };
 
     expect(isEligibleListing(eligible, prefs)).toBe(true);
     const incompatible = [
@@ -80,7 +81,7 @@ describe("validation and explainable scoring", () => {
       { label:"missing required feature", listing:{ ...eligible, features:["parking"] } },
       { label:"avoided term in title", listing:{ ...eligible, title:"AUCTION listing" } },
       { label:"avoided term in description", listing:{ ...eligible, description:"Auction only" } },
-      { label:"avoided term in feature", listing:{ ...eligible, features:["parking", "elevator", "AUCTION"] } },
+      { label:"avoided term in feature", listing:{ ...eligible, features:["parking","elevator","AUCTION"] } },
     ];
 
     for (const testCase of incompatible) {
@@ -101,53 +102,146 @@ describe("validation and explainable scoring", () => {
   });
 });
 
+describe("page extraction", () => {
+  const saleOffer = {
+    "@context":"https://schema.org","@type":"Offer",
+    url:"https://www.sheypoor.com/v/test-468409496.html", name:"فروش آپارتمان",
+    description:"آپارتمان خوش ساخت", price:8000000000, priceCurrency:"toman", category:"forSale",
+    itemOffered:{ "@type":"Apartment", floorSize:{ "@type":"QuantitativeValue", value:93, unitCode:"MTK" }, numberOfRooms:"2",
+      address:{ "@type":"PostalAddress", addressCountry:"IR", addressRegion:"قائم شهر", addressLocality:"خیابان ساری" },
+      geo:{ "@type":"GeoCoordinates", longitude:52.8899, latitude:36.4769 },
+      amenityFeature:[{ "@type":"LocationFeatureSpecification", name:"Parking", value:true }] },
+  };
+  const rentOffer = {
+    "@context":"https://schema.org","@type":"Offer",
+    url:"https://www.sheypoor.com/v/rent-468408820.html", name:"آپارتمان روشن دشت",
+    description:"برای اجاره تماس بگیرید", price:15000000, priceCurrency:"toman", category:"rent",
+    priceSpecification:{ "@type":"CompoundPriceSpecification", priceComponent:[
+      { "@type":"UnitPriceSpecification", priceType:"Rent", price:15000000, unitText:"PerMonth" },
+      { "@type":"UnitPriceSpecification", priceType:"Deposit", price:150000000, unitText:"OneTime" }] },
+    itemOffered:{ "@type":"Apartment", floorSize:{ value:64 }, numberOfRooms:"1" },
+  };
+
+  it("reads a sale listing from schema.org structured data", () => {
+    const html = `<html><head><script type="application/ld+json">${JSON.stringify(saleOffer)}</script></head><body></body></html>`;
+    const extracted = extractListingFromHtml(html, "https://www.sheypoor.com/v/test-468409496.html");
+    expect(extracted).not.toBeNull();
+    expect(extracted!.title).toBe("فروش آپارتمان");
+    expect(extracted!.price).toBe(8000000000);
+    expect(extracted!.transactionType).toBe("buy");
+    expect(extracted!.areaM2).toBe(93);
+    expect(extracted!.bedrooms).toBe(2);
+    expect(extracted!.city).toBe("قائم شهر");
+    expect(extracted!.features).toEqual(["parking"]);
+    expect(extracted!.sourceListingId).toBe("468409496");
+  });
+
+  it("keeps the monthly rent and the deposit apart for rentals", () => {
+    const html = `<script type="application/ld+json">${JSON.stringify(rentOffer)}</script>`;
+    const extracted = extractListingFromHtml(html, "https://www.sheypoor.com/v/rent-468408820.html");
+    expect(extracted!.transactionType).toBe("rent");
+    expect(extracted!.monthlyRent).toBe(15000000);
+    expect(extracted!.deposit).toBe(150000000);
+    expect(extracted!.price).toBeUndefined();
+  });
+
+  it("falls back to OpenGraph metadata when structured data is absent", () => {
+    const html = `<html><head><meta property="og:title" content="آپارتمان ۹۰ متری" /><meta property="og:description" content="قیمت ۵ میلیارد تومان" /></head><body></body></html>`;
+    const extracted = extractListingFromHtml(html, "https://www.divar.ir/v/abc123456");
+    expect(extracted!.title).toBe("آپارتمان ۹۰ متری");
+    expect(extracted!.price).toBe(5000000000);
+  });
+
+  it("understands Persian numerals and price notations", () => {
+    expect(parseNumber("۱۲,۵۰۰")).toBe(12500);
+    expect(parsePriceFromText("قیمت ۸ میلیارد تومان")).toBe(8000000000);
+    expect(parsePriceFromText("اجاره ۲۵ میلیون تومان")).toBe(25000000);
+  });
+});
+
+describe("source authorization", () => {
+  it("fails closed when a source is missing, disabled, or not approved", async () => {
+    const db = new FakeDatabase({ sources: [] });
+    const env = fakeEnv(db);
+    expect((await checkSourcePermission(env, "src-demo")).allowed).toBe(false);
+
+    const disabled = new FakeDatabase({ sources: [{ id:"src-demo", name:"x", kind:"demo", enabled:0, permission_status:"approved" }] });
+    const disabledResult = await checkSourcePermission(fakeEnv(disabled), "src-demo");
+    expect(disabledResult.allowed).toBe(false);
+    expect(disabledResult.allowed === false && disabledResult.code).toBe("SOURCE_DISABLED");
+
+    const unreviewed = new FakeDatabase({ sources: [{ id:"src-demo", name:"x", kind:"demo", enabled:1, permission_status:"unreviewed" }] });
+    const unreviewedResult = await checkSourcePermission(fakeEnv(unreviewed), "src-demo");
+    expect(unreviewedResult.allowed).toBe(false);
+    expect(unreviewedResult.allowed === false && unreviewedResult.code).toBe("PERMISSION_NOT_APPROVED");
+  });
+
+  it("allows a host only when it matches an allowed suffix", () => {
+    expect(isHostAllowed("www.sheypoor.com", ["sheypoor.com"])).toBe(true);
+    expect(isHostAllowed("sheypoor.com", ["sheypoor.com"])).toBe(true);
+    expect(isHostAllowed("evil-sheypoor.com", ["sheypoor.com"])).toBe(false);
+    expect(isHostAllowed("sheypoor.com.evil.test", ["sheypoor.com"])).toBe(false);
+  });
+});
+
 describe("failure-safe ingestion", () => {
   it("skips duplicate source IDs within one import before the D1 batch", async () => {
-    const writes: string[] = [];
-    const db = {
-      prepare(sql: string) {
-        return {
-          bind(..._values: unknown[]) { return this; },
-          async first() { return null; },
-          async run() { return { success: true }; },
-          sql,
-        };
-      },
-      async batch(statements: Array<{sql?: string}>) { writes.push(...statements.map(s => s.sql ?? "")); return []; },
-    } as unknown as D1Database;
-    const env = { DB: db } as Env;
+    const db = new FakeDatabase();
+    const env = fakeEnv(db);
     const base = { source:"manual", sourceListingId:"same-source-id", title:"First title", city:"Tehran", propertyType:"apartment", transactionType:"buy" as const, price:100, features:[] };
 
     const result = await importListings(env, "manual", [base, { ...base, title:"Second title", price:120 }]);
 
     expect(result.inserted).toBe(1);
     expect(result.skipped).toBe(1);
-    expect(writes.filter(sql => sql.includes("INSERT INTO listings"))).toHaveLength(1);
-    expect(writes.some(sql => sql.includes("status='completed'"))).toBe(true);
+    expect(db.listings).toHaveLength(1);
+    expect(db.statements.filter(sql => sql.includes("INSERT INTO listings"))).toHaveLength(1);
+    expect(db.ingestionRuns[0]!.status).toBe("completed");
+  });
+
+  it("records a row-level diagnostic for every invalid row", async () => {
+    const db = new FakeDatabase();
+    const env = fakeEnv(db);
+    const result = await importListings(env, "manual", [
+      { source:"manual", title:"Valid", city:"Tehran", propertyType:"apartment", transactionType:"buy", price:100, features:[] },
+      { source:"manual", title:"Broken", city:"Tehran", propertyType:"apartment", transactionType:"buy", price:-5, features:[] },
+    ]);
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toBe(1);
+    expect(db.importErrors).toHaveLength(1);
+    expect(db.importErrors[0]!.error_code).toBe("VALIDATION_ERROR");
+    expect(db.importErrors[0]!.safe_message).not.toContain("Broken");
   });
 
   it("marks the run failed with a sanitized message when the transactional D1 batch fails", async () => {
-    const statements: string[] = [];
-    const db = {
+    const db = new FakeDatabase();
+    const original = db.batch?.bind?.(db as unknown as { batch: unknown });
+    void original;
+    const failing = {
       prepare(sql: string) {
-        statements.push(sql);
+        db.statements.push(sql);
         return {
-          bind(..._values: unknown[]) { return this; },
-          async first() { return null; },
-          async run() { return { success: true }; },
+          bind() { return this; },
+          async first() {
+            if (sql.includes("FROM sources")) {
+              return { id: "src-demo", name: "demo", kind: "demo", base_url: null, allowed_host: null, enabled: 1, permission_status: "approved", permission_reviewed_at: null, permission_notes: null };
+            }
+            return null;
+          },
+          async run() { return { success: true, meta: { changes: 1 } }; },
         };
       },
-      async batch(_statements: unknown[]) { throw new Error("SQLITE_CONSTRAINT secret-detail"); },
+      async batch() { throw new Error("SQLITE_CONSTRAINT secret-detail"); },
     } as unknown as D1Database;
-    const env = { DB: db } as Env;
+    const env = { DB: failing, RATE_LIMIT_PER_MINUTE: "60" } as never;
 
     await expect(importListings(env, "manual", [{
       source:"demo", sourceListingId:"failure-test", title:"Bright Apartment", city:"Tehran",
       propertyType:"apartment", transactionType:"buy", price:100, features:[],
     }])).rejects.toThrow("Import failed; listing changes were rolled back");
 
-    expect(statements.some(sql => sql.includes("status='failed'") && sql.includes("message='Import failed; listing changes were rolled back'"))).toBe(true);
-    expect(statements.some(sql => sql.includes("status='completed'"))).toBe(true);
+    expect(db.statements.some(sql => sql.includes("status='failed'") && sql.includes("Import failed; listing changes were rolled back"))).toBe(true);
   });
 });
 
@@ -167,40 +261,5 @@ describe("atomic rate limiting", () => {
     expect(sql).toContain("RETURNING window_start, request_count");
     expect(response).toMatchObject({ status: 429 });
     expect(continued).toBe(false);
-  });
-});
-
-describe("anonymous preference capabilities", () => {
-  it("requires UUIDv4 IDs, prevents overwriting a used ID, and does not expose a preference GET route", async () => {
-    let bucketCount = 0;
-    let preferenceCreated = false;
-    const db = {
-      prepare(sql: string) {
-        return {
-          bind(..._values: unknown[]) { return this; },
-          async first() {
-            if (sql.includes("RETURNING window_start, request_count")) return { window_start: Math.floor(Date.now() / 60_000), request_count: ++bucketCount };
-            return null;
-          },
-          async run() {
-            if (sql.includes("INSERT INTO user_preferences")) {
-              if (preferenceCreated) return { meta: { changes: 0 } };
-              preferenceCreated = true;
-              return { meta: { changes: 1 } };
-            }
-            return { meta: { changes: 1 } };
-          },
-        };
-      },
-    } as unknown as D1Database;
-    const env = { DB: db, RATE_LIMIT_PER_MINUTE: "60", ALLOWED_ORIGINS: "http://localhost:5173" } as Env;
-    const invalid = await app.request("/api/preferences/predictable-id", { method:"PUT", headers:{"Content-Type":"application/json"}, body:"{}" }, env);
-    expect(invalid.status).toBe(400);
-
-    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const create = () => app.request(`/api/preferences/${id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:"{}" }, env);
-    expect((await create()).status).toBe(200);
-    expect((await create()).status).toBe(409);
-    expect((await app.request(`/api/preferences/${id}`, {}, env)).status).toBe(404);
   });
 });

@@ -24,3 +24,27 @@ export async function rateLimit(c: Context<{ Bindings: Env }>, next: Next) {
   }
   await next();
 }
+
+/**
+ * A stricter budget for expensive public operations such as fetching a
+ * user-submitted listing page. The window is hourly and the bucket is keyed
+ * separately from the general per-minute bucket.
+ */
+export async function hourlyOperationLimit(c: Context<{ Bindings: Env }>, next: Next) {
+  const limit = Math.max(1, Number(c.env.LINK_IMPORT_PER_HOUR) || 20);
+  const client = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const windowStart = Math.floor(Date.now() / 3_600_000);
+  const key = `hourly:${client}`;
+  try {
+    const row = await c.env.DB.prepare(`INSERT INTO rate_limit_buckets(bucket_key, window_start, request_count) VALUES(?, ?, 1)
+      ON CONFLICT(bucket_key) DO UPDATE SET request_count = CASE WHEN window_start = excluded.window_start THEN request_count + 1 ELSE 1 END, window_start = excluded.window_start
+      RETURNING window_start, request_count`).bind(key, windowStart).first<{window_start:number;request_count:number}>();
+    if (!row || row.window_start !== windowStart) throw new Error("Limiter returned an invalid bucket");
+    if (row.request_count > limit) {
+      return c.json({ error: { code: "RATE_LIMITED", message: "تعداد درخواست‌های این عملیات بیش از حد مجاز است" } }, 429);
+    }
+  } catch {
+    return c.json({ error: { code: "RATE_LIMIT_UNAVAILABLE", message: "سرویس محدودکنندهٔ نرخ موقتاً در دسترس نیست" } }, 503);
+  }
+  await next();
+}

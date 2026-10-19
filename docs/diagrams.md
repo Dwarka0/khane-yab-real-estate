@@ -1,6 +1,202 @@
 # System diagrams
 
-All diagrams use Mermaid. The section titled **Current implementation: preference-to-recommendation sequence** records the implemented client/API flow. Every other diagram in this file is a **target-state design** unless its heading explicitly says otherwise; it may include proposed services, entities, controls, and fields that are not implemented. Do not read target diagrams as deployment evidence. Update the current-state diagram when routes or response shapes change, and update target diagrams when the design changes.
+All diagrams use Mermaid. The sections titled **Current implementation: …** record the implemented client/API flow. Every other diagram in this file is a **target-state design** unless its heading explicitly says otherwise; it may include proposed services, entities, controls, and fields that are not implemented. Do not read target diagrams as deployment evidence. Update the current-state diagrams when routes or response shapes change, and update target diagrams when the design changes.
+
+## Current implementation: user-submitted listing link
+
+```mermaid
+sequenceDiagram
+  actor Seeker
+  participant Client as Web/mobile client
+  participant API as Worker API
+  participant Guard as Source registry (permission gate)
+  participant Page as Public listing page
+  participant DB as D1 listings + observations
+  Seeker->>Client: Paste a listing URL
+  Client->>API: POST /api/listings/import-link { url }
+  API->>Guard: check source enabled + permission approved
+  alt permission missing, disabled, or unapproved
+    Guard-->>API: 403 SOURCE_DISABLED / PERMISSION_NOT_APPROVED
+    API-->>Client: 403 with a stable error code
+  else allowed
+    Guard-->>API: source with host allowlist
+    API->>API: validate https, no credentials, no IP host, host in allowlist
+    API->>Page: GET the single page (no cookies, 8s timeout, 512 KiB cap)
+    alt redirect leaves the allowlist
+      Page-->>API: 3xx to a foreign host
+      API-->>Client: 502 SOURCE_FETCH_FAILED
+    else page read
+      Page-->>API: HTML
+      API->>API: read JSON-LD Offer, then OpenGraph, then text heuristics
+      API->>DB: upsert listing + record listing_observation + ingestion run
+      API-->>Client: 201 created / 200 updated with the stored listing
+    end
+  end
+```
+
+## Current implementation: source permission gate
+
+```mermaid
+stateDiagram-v2
+  [*] --> Unreviewed: source registered in `sources`
+  Unreviewed --> Approved: permission record reviewed and approved
+  Unreviewed --> Rejected: review refused
+  Approved --> Expired: permission record expired
+  Approved --> Disabled: operator disables the source
+  Rejected --> Unreviewed: new review started
+  Expired --> Unreviewed: renewal requested
+  Disabled --> Approved: operator re-enables an approved source
+  Approved --> Approved: usage continues (allowed)
+  Unreviewed --> Failed: ingestion refused (fail closed)
+  Rejected --> Failed: ingestion refused (fail closed)
+  Expired --> Failed: ingestion refused (fail closed)
+  Disabled --> Failed: ingestion refused (fail closed)
+  Failed --> [*]
+```
+
+## Domain (analysis) model
+
+The analysis model names the problem-domain concepts independently of the storage design.
+
+```mermaid
+classDiagram
+  class Listing {
+    +string id
+    +TransactionType transactionType
+    +string propertyType
+    +string city
+    +string? neighborhood
+    +int? areaM2
+    +int? bedrooms
+    +int? salePrice
+    +int? monthlyRent
+    +int? deposit
+    +datetime publishedAt
+    +datetime lastSeenAt
+    +Freshness freshness
+  }
+  class Seeker {
+    +string capabilityId
+    +Preference preference
+  }
+  class Preference {
+    +int? budgetMin
+    +int? budgetMax
+    +string[] propertyTypes
+    +TransactionType transactionType
+    +string? city
+    +string[] neighborhoods
+    +int? minBedrooms
+    +int? minAreaM2
+    +string[] mustHave
+    +string[] avoid
+  }
+  class Match {
+    +Listing listing
+    +int score
+    +string[] reasons
+    +Freshness freshness
+  }
+  class Source {
+    +string name
+    +SourceKind kind
+    +PermissionStatus permissionStatus
+  }
+  class Observation {
+    +datetime observedAt
+    +string? sourceUrl
+    +string contentHash
+  }
+  class IngestionRun {
+    +RunStatus status
+    +int received
+    +int inserted
+    +int updated
+    +int skipped
+  }
+  Seeker "1" --> "1" Preference
+  Seeker "1" --> "0..*" Match
+  Match "*" --> "1" Listing
+  Source "1" --> "0..*" Observation
+  Observation "*" --> "1" Listing
+  Source "1" --> "0..*" IngestionRun
+```
+
+## Package diagram
+
+```mermaid
+flowchart TB
+  subgraph client[Client packages]
+    web[web: React + Vite single page]
+    mob[mobile: Expo / React Native app]
+  end
+  subgraph api[Worker packages]
+    router[index: routes and middleware]
+    validation[validation: Zod schemas]
+    scoring[scoring: eligibility and ranking]
+    ingestion[ingestion: run lifecycle and diagnostics]
+    link[linkImport: user-submitted page fetch]
+    extract[pageExtract: structured-data reader]
+    sources[sources: registry and permission gate]
+    listings[listings: normalization, hashing, freshness]
+    ratelimit[rateLimit: atomic budgets]
+  end
+  subgraph data[Data packages]
+    d1[(D1: listings, observations, preferences, runs, sources, buckets)]
+  end
+  web --> api
+  mob --> api
+  router --> validation
+  router --> scoring
+  router --> ingestion
+  router --> link
+  ingestion --> sources
+  ingestion --> listings
+  link --> extract
+  link --> listings
+  link --> sources
+  router --> ratelimit
+  scoring --> listings
+  api --> d1
+```
+
+## Project schedule (plan of record)
+
+```mermaid
+gantt
+  title Pressman-style delivery plan for the recommendation platform
+  dateFormat YYYY-MM-DD
+  axisFormat %d %b
+  section Requirements
+  Scope, stories, acceptance criteria :done, req, 2026-10-19, 1d
+  Traceability matrix and risk register :done, trace, 2026-10-19, 1d
+  section Design
+  Architecture, API and data design :done, arch, 2026-10-19, 1d
+  UML diagrams and use-case flows :done, uml, 2026-10-19, 1d
+  section Implementation
+  Worker API, D1 schema, ingestion :done, impl, 2026-10-19, 1d
+  Source registry and permission gate :done, gate, 2026-10-19, 1d
+  User-submitted link import :done, link, 2026-10-19, 1d
+  Web and mobile clients :done, clients, 2026-10-19, 1d
+  section Verification
+  Unit and route integration tests :done, test, 2026-10-19, 1d
+  Live smoke test on Cloudflare :done, smoke, 2026-10-19, 1d
+  section Release
+  Documentation, licence, publication :active, rel, 2026-10-19, 1d
+  Mobile store submission :crit, store, after rel, 3d
+```
+
+## RCM (reliability, cost, maintenance) estimate
+
+| Factor | Estimate | Basis |
+|---|---|---|
+| Reliability | High for the read path; medium for ingestion | Ingestion is transactional and idempotent; the recommendation path is pure scoring over indexed rows. |
+| Cost | Low at small scale | One Worker, one D1 database, one Pages project. Cost grows with request volume and listing count, not with features. |
+| Maintenance | Low | Additive D1 migrations, a documented API contract, one documented ranking configuration, and synthetic test fixtures. |
+| Testability | High | Scoring and normalization are pure functions; routes are covered by an in-memory D1 double. |
+| Observability | Medium | Structured error logs with redacted capability IDs; request-id metrics are still missing. |
+| Security | Medium | Fail-closed permission gate, host allowlist, HTTPS-only, bounded fetch; account authentication is still absent. |
+
 
 ## Context
 

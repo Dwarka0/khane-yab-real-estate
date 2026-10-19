@@ -47,6 +47,18 @@ export const listingSchema = z.object({
   if (listing.transactionType === "buy" && listing.deposit !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["deposit"], message: "Sale listings cannot include rental deposit" });
 });
 
+export const linkImportSchema = z.object({
+  url: z.string().trim().min(8).max(2048),
+  city: z.string().trim().min(1).max(120).optional(),
+}).refine(value => {
+  try {
+    const url = new URL(value.url);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}, { message: "url must be an https URL without credentials", path: ["url"] });
+
 export const searchSchema = z.object({
   q: z.string().trim().max(160).optional(),
   city: z.string().trim().max(120).optional(),

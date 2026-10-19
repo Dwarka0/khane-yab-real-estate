@@ -6,7 +6,8 @@ This documentation defines a reviewable baseline for a Persian, right-to-left re
 
 - [Product scope and requirements](requirements.md) — scope, assumptions, risks, user stories, requirements, acceptance criteria, and traceability.
 - [Architecture and data/API design](architecture-api-data.md) — decisions, trust boundaries, API contract, and proposed data model.
-- [System diagrams](diagrams.md) — Mermaid context, use case, activity, class, sequence, state, component, deployment, ERD, data-flow, ingestion, and recommendation diagrams.
+- [Use-case descriptions](use-cases.md) — trigger, flows, business rules, and acceptance criteria for each use case.
+- [System diagrams](diagrams.md) — Mermaid context, use case, activity, class, domain model, sequence, state, component, package, deployment, ERD, data-flow, ingestion, recommendation, and schedule diagrams.
 - [Test plan](test-plan.md) — test levels, fixtures, cases, and exit criteria.
 - [Review plan](review-plan.md) — review gates and release-readiness checklist.
 

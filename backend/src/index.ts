@@ -2,12 +2,15 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
+import type { Context } from "hono";
 import type { Env } from "./types";
-import { preferencesSchema, searchSchema } from "./validation";
-import { rateLimit } from "./rateLimit";
-import { demoListings, importListings } from "./ingestion";
+import { linkImportSchema, preferencesSchema, searchSchema } from "./validation";
+import { hourlyOperationLimit, rateLimit } from "./rateLimit";
+import { demoListings, importListings, IngestionPermissionError } from "./ingestion";
+import { importListingFromUrl } from "./linkImport";
 import { isEligibleListing, scoreListing } from "./scoring";
 import { freshnessScore, isFresh } from "./listings";
+import { checkSourcePermission, loadSource } from "./sources";
 
 const app = new Hono<{ Bindings: Env }>();
 app.use("/api/*", cors({
@@ -21,6 +24,8 @@ app.use("/api/*", cors({
 app.use("/api/*", rateLimit);
 app.use("/api/preferences/*", bodyLimit({ maxSize: 16 * 1024 }));
 app.use("/api/ingest/manual", bodyLimit({ maxSize: 1_048_576 }));
+app.use("/api/listings/import-link", hourlyOperationLimit);
+app.use("/api/listings/import-link", bodyLimit({ maxSize: 8 * 1024 }));
 
 app.onError((error, c) => {
   if (error instanceof HTTPException) {
@@ -34,7 +39,52 @@ app.onError((error, c) => {
   return c.json({ error: { code: "INTERNAL_ERROR", message: "درخواست با خطا مواجه شد" } }, 500);
 });
 
+type PublicListing = {
+  id: string; source: string; sourceUrl?: string; title: string; description: string; city: string;
+  neighborhood?: string; propertyType: string; transactionType: "buy" | "rent";
+  price: number; salePrice?: number; monthlyRent?: number; deposit?: number;
+  areaM2?: number; bedrooms?: number; bathrooms?: number;
+  features: string[]; publishedAt?: string; last_seen_at: string; freshnessScore?: number;
+};
+
+function toPublicListing(row: Record<string, unknown>, withFreshness: boolean): PublicListing {
+  return {
+    id: String(row.id), source: String(row.source), sourceUrl: row.source_url == null ? undefined : String(row.source_url),
+    title: String(row.title), description: String(row.description), city: String(row.city),
+    neighborhood: row.neighborhood == null ? undefined : String(row.neighborhood), propertyType: String(row.property_type),
+    transactionType: String(row.transaction_type) as "buy" | "rent", price: Number(row.price),
+    salePrice: row.sale_price == null ? undefined : Number(row.sale_price),
+    monthlyRent: row.monthly_rent == null ? undefined : Number(row.monthly_rent),
+    deposit: row.deposit == null ? undefined : Number(row.deposit),
+    areaM2: row.area_m2 == null ? undefined : Number(row.area_m2),
+    bedrooms: row.bedrooms == null ? undefined : Number(row.bedrooms),
+    bathrooms: row.bathrooms == null ? undefined : Number(row.bathrooms),
+    features: JSON.parse(String(row.features)) as string[],
+    publishedAt: row.published_at == null ? undefined : String(row.published_at),
+    last_seen_at: String(row.last_seen_at),
+    freshnessScore: withFreshness ? freshnessScore(String(row.last_seen_at)) : undefined,
+  };
+}
+
+function isAdmin(c: Context<{ Bindings: Env }>): boolean {
+  const token = c.env.ADMIN_INGEST_TOKEN;
+  return Boolean(token) && c.req.header("Authorization") === `Bearer ${token}`;
+}
+
 app.get("/health", c => c.json({ status: "ok", service: "real-estate-platform-api" }));
+
+/** Public catalogue of the data sources this deployment is allowed to use. */
+app.get("/api/sources", async c => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, name, kind, base_url, enabled, permission_status FROM sources WHERE enabled = 1 AND permission_status = 'approved' ORDER BY name`,
+  ).all<Record<string, unknown>>();
+  return c.json({
+    items: rows.results.map(row => ({
+      id: String(row.id), name: String(row.name), kind: String(row.kind),
+      baseUrl: row.base_url == null ? undefined : String(row.base_url),
+    })),
+  });
+});
 
 app.put("/api/preferences/:id", async c => {
   const id = c.req.param("id").trim();
@@ -46,11 +96,13 @@ app.put("/api/preferences/:id", async c => {
   const parsed = preferencesSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: { code:"VALIDATION_ERROR", message:"اطلاعات ترجیحات معتبر نیست", details:parsed.error.flatten() } }, 400);
   const p = parsed.data;
-  const saved = await c.env.DB.prepare(`INSERT INTO user_preferences(id,budget_min,budget_max,property_types,transaction_type,city,neighborhoods,min_bedrooms,min_area_m2,max_commute_minutes,must_have,avoid,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING`)
-    .bind(id,p.budgetMin ?? null,p.budgetMax ?? null,JSON.stringify(p.propertyTypes),p.transactionType,p.city ?? null,JSON.stringify(p.neighborhoods),p.minBedrooms ?? null,p.minAreaM2 ?? null,p.maxCommuteMinutes ?? null,JSON.stringify(p.mustHave),JSON.stringify(p.avoid)).run();
+  const ttlHours = Math.max(1, Number(c.env.PREFERENCE_TTL_HOURS) || 24);
+  const expiresAt = new Date(Date.now() + ttlHours * 3_600_000).toISOString();
+  const saved = await c.env.DB.prepare(`INSERT INTO user_preferences(id,budget_min,budget_max,property_types,transaction_type,city,neighborhoods,min_bedrooms,min_area_m2,max_commute_minutes,must_have,avoid,expires_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING`)
+    .bind(id,p.budgetMin ?? null,p.budgetMax ?? null,JSON.stringify(p.propertyTypes),p.transactionType,p.city ?? null,JSON.stringify(p.neighborhoods),p.minBedrooms ?? null,p.minAreaM2 ?? null,p.maxCommuteMinutes ?? null,JSON.stringify(p.mustHave),JSON.stringify(p.avoid),expiresAt).run();
   if (saved.meta.changes === 0) return c.json({ error: { code:"PREFERENCE_ID_ALREADY_USED", message:"این شناسه قبلاً استفاده شده است؛ جست‌وجوی تازه‌ای آغاز کنید" } }, 409);
-  return c.json({ id, preferences:p });
+  return c.json({ id, preferences:p, expiresAt });
 });
 
 app.get("/api/listings", async c => {
@@ -66,18 +118,13 @@ app.get("/api/listings", async c => {
   if (p.minAreaM2 !== undefined) { where.push("area_m2 >= ?"); values.push(p.minAreaM2); }
   if (p.minBedrooms !== undefined) { where.push("bedrooms >= ?"); values.push(p.minBedrooms); }
   if (p.q) { where.push("(title LIKE ? ESCAPE char(92) OR description LIKE ? ESCAPE char(92) OR neighborhood LIKE ? ESCAPE char(92))"); const q = `%${p.q.replace(/[\\%_]/g, "\\$&")}%`; values.push(q,q,q); }
-  const result = await c.env.DB.prepare(`SELECT * FROM listings WHERE ${where.join(" AND ")} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?`).bind(...values,p.limit,p.offset).all<Record<string,unknown>>();
+  const clause = where.join(" AND ");
+  const totalRow = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM listings WHERE ${clause}`).bind(...values).first<{total:number}>();
+  const result = await c.env.DB.prepare(`SELECT * FROM listings WHERE ${clause} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?`).bind(...values,p.limit,p.offset).all<Record<string,unknown>>();
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
-  const listings = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
-    id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url),
-    title:String(r.title), description:String(r.description), city:String(r.city),
-    neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type),
-    transactionType:String(r.transaction_type), price:Number(r.price), salePrice:r.sale_price == null ? undefined : Number(r.sale_price), monthlyRent:r.monthly_rent == null ? undefined : Number(r.monthly_rent), deposit:r.deposit == null ? undefined : Number(r.deposit), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2),
-    bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms),
-    features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at),
-    last_seen_at:String(r.last_seen_at), freshnessScore:freshnessScore(String(r.last_seen_at)),
-  }));
-  return c.json({ items:listings, limit:p.limit, offset:p.offset, count:listings.length });
+  const listings = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => toPublicListing(r, true));
+  const total = Number(totalRow?.total ?? 0);
+  return c.json({ items:listings, limit:p.limit, offset:p.offset, count:listings.length, total, hasMore:p.offset + listings.length < total });
 });
 
 app.post("/api/recommendations/:preferenceId", async c => {
@@ -86,17 +133,46 @@ app.post("/api/recommendations/:preferenceId", async c => {
   const prefs = { budgetMin: row.budget_min == null ? undefined : Number(row.budget_min), budgetMax: row.budget_max == null ? undefined : Number(row.budget_max), propertyTypes:JSON.parse(String(row.property_types)) as string[], transactionType:row.transaction_type as "buy"|"rent", city:row.city == null ? undefined : String(row.city), neighborhoods:JSON.parse(String(row.neighborhoods)) as string[], minBedrooms:row.min_bedrooms == null ? undefined : Number(row.min_bedrooms), minAreaM2:row.min_area_m2 == null ? undefined : Number(row.min_area_m2), maxCommuteMinutes:row.max_commute_minutes == null ? undefined : Number(row.max_commute_minutes), mustHave:JSON.parse(String(row.must_have)) as string[], avoid:JSON.parse(String(row.avoid)) as string[] };
   const result = await c.env.DB.prepare("SELECT * FROM listings WHERE status='active' AND transaction_type=? ORDER BY last_seen_at DESC LIMIT 500").bind(prefs.transactionType).all<Record<string,unknown>>();
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
-  const items = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
+  const eligible = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
     row: r,
-    listing: { id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), salePrice:r.sale_price == null ? undefined : Number(r.sale_price), monthlyRent:r.monthly_rent == null ? undefined : Number(r.monthly_rent), deposit:r.deposit == null ? undefined : Number(r.deposit), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms), features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at), last_seen_at:String(r.last_seen_at) },
+    listing: toPublicListing(r, false),
   })).filter(({ listing }) => isEligibleListing(listing,prefs)).map(({ row, listing }) => ({
     ...scoreListing(listing,prefs), freshness:freshnessScore(String(row.last_seen_at)),
-  })).sort((a,b) => b.score - a.score || b.freshness - a.freshness).slice(0,50);
-  return c.json({ preferenceId:c.req.param("preferenceId"), scoring:{ version:1, weights:"Configured by available preferences; score normalized to 0-100" }, items });
+  })).sort((a,b) => b.score - a.score || b.freshness - a.freshness || a.listing.id.localeCompare(b.listing.id));
+  const total = eligible.length;
+  const limit = Math.max(1, Math.min(100, Number(c.req.query("limit")) || 50));
+  const offset = Math.max(0, Number(c.req.query("offset")) || 0);
+  return c.json({
+    preferenceId:c.req.param("preferenceId"),
+    scoring:{ version:1, weights:"Configured by available preferences; score normalized to 0-100" },
+    items: eligible.slice(offset, offset + limit),
+    total,
+    limit,
+    offset,
+    hasMore: offset + Math.min(limit, Math.max(0, total - offset)) < total,
+  });
+});
+
+/**
+ * Imports a single listing page that a user submitted. The user supplies the
+ * URL, so the platform never crawls a source; it reads one page the user
+ * pointed at and always keeps the link back to the original listing.
+ */
+app.post("/api/listings/import-link", async c => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = linkImportSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error:{code:"VALIDATION_ERROR",message:"نشانی آگهی معتبر نیست",details:parsed.error.flatten()} },400);
+  const result = await importListingFromUrl(c.env, parsed.data.url);
+  if (!result.ok) return c.json({ error:{code:result.code,message:result.message} }, result.status);
+  return c.json({
+    listing: result.listing,
+    created: result.created,
+    source: { id: result.source.id, name: result.source.name, kind: result.source.kind },
+  }, result.created ? 201 : 200);
 });
 
 app.post("/api/ingest/manual", async c => {
-  if (!c.env.ADMIN_INGEST_TOKEN || c.req.header("Authorization") !== `Bearer ${c.env.ADMIN_INGEST_TOKEN}`) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
+  if (!isAdmin(c)) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
   const contentLength = Number(c.req.header("Content-Length") ?? 0);
   if (contentLength > 1_048_576) return c.json({error:{code:"PAYLOAD_TOO_LARGE",message:"حجم درخواست بیشتر از حد مجاز است"}},413);
   const rawBody = await c.req.text();
@@ -106,12 +182,89 @@ app.post("/api/ingest/manual", async c => {
   if (!body || typeof body !== "object" || !("listings" in body) || !Array.isArray(body.listings)) return c.json({error:{code:"VALIDATION_ERROR",message:"فیلد listings باید آرایه باشد"}},400);
   if (body.listings.length > 100) return c.json({error:{code:"VALIDATION_ERROR",message:"حداکثر ۱۰۰ آگهی در هر درخواست مجاز است"}},400);
   try { return c.json(await importListings(c.env,"manual",body.listings)); }
-  catch { return c.json({error:{code:"INGEST_FAILED",message:"ورود آگهی‌ها انجام نشد؛ وضعیت پایگاه داده را بررسی کنید"}},500); }
+  catch (error) {
+    if (error instanceof IngestionPermissionError) return c.json({error:{code:error.code,message:error.message}},403);
+    return c.json({error:{code:"INGEST_FAILED",message:"ورود آگهی‌ها انجام نشد؛ وضعیت پایگاه داده را بررسی کنید"}},500);
+  }
 });
 
 app.post("/api/ingest/demo", async c => {
-  if (!c.env.ADMIN_INGEST_TOKEN || c.req.header("Authorization") !== `Bearer ${c.env.ADMIN_INGEST_TOKEN}`) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
-  return c.json(await importListings(c.env,"demo",demoListings));
+  if (!isAdmin(c)) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
+  try { return c.json(await importListings(c.env,"demo",demoListings)); }
+  catch (error) {
+    if (error instanceof IngestionPermissionError) return c.json({error:{code:error.code,message:error.message}},403);
+    return c.json({error:{code:"INGEST_FAILED",message:"ورود آگهی‌ها انجام نشد؛ وضعیت پایگاه داده را بررسی کنید"}},500);
+  }
+});
+
+/** Operator view over the ingestion runs (FR-11). */
+app.get("/api/ingest/runs", async c => {
+  if (!isAdmin(c)) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
+  const limit = Math.max(1, Math.min(100, Number(c.req.query("limit")) || 20));
+  const rows = await c.env.DB.prepare(
+    `SELECT id, adapter, started_at, finished_at, received_count, inserted_count, updated_count, skipped_count, status, message
+     FROM ingestion_runs ORDER BY started_at DESC LIMIT ?`,
+  ).bind(limit).all<Record<string, unknown>>();
+  return c.json({
+    items: rows.results.map(row => ({
+      id: String(row.id), adapter: String(row.adapter), startedAt: String(row.started_at),
+      finishedAt: row.finished_at == null ? undefined : String(row.finished_at),
+      received: Number(row.received_count), inserted: Number(row.inserted_count),
+      updated: Number(row.updated_count), skipped: Number(row.skipped_count),
+      status: String(row.status), message: row.message == null ? undefined : String(row.message),
+    })),
+  });
+});
+
+/** One run with its row-level diagnostics. */
+app.get("/api/ingest/runs/:id", async c => {
+  if (!isAdmin(c)) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
+  const run = await c.env.DB.prepare(
+    `SELECT id, adapter, started_at, finished_at, received_count, inserted_count, updated_count, skipped_count, status, message
+     FROM ingestion_runs WHERE id = ?`,
+  ).bind(c.req.param("id")).first<Record<string, unknown>>();
+  if (!run) return c.json({error:{code:"RUN_NOT_FOUND",message:"اجرای ورود داده یافت نشد"}},404);
+  const errors = await c.env.DB.prepare(
+    "SELECT row_number, error_code, safe_message FROM import_errors WHERE run_id = ? ORDER BY row_number LIMIT 200",
+  ).bind(c.req.param("id")).all<Record<string, unknown>>();
+  return c.json({
+    run: {
+      id: String(run.id), adapter: String(run.adapter), startedAt: String(run.started_at),
+      finishedAt: run.finished_at == null ? undefined : String(run.finished_at),
+      received: Number(run.received_count), inserted: Number(run.inserted_count),
+      updated: Number(run.updated_count), skipped: Number(run.skipped_count),
+      status: String(run.status), message: run.message == null ? undefined : String(run.message),
+    },
+    errors: errors.results.map(row => ({
+      rowNumber: row.row_number == null ? undefined : Number(row.row_number),
+      code: String(row.error_code), message: String(row.safe_message),
+    })),
+  });
+});
+
+/** Removes expired anonymous preferences and stale operational rows (FR-14). */
+app.post("/api/maintenance/cleanup", async c => {
+  if (!isAdmin(c)) return c.json({error:{code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}},401);
+  const now = new Date().toISOString();
+  const preferences = await c.env.DB.prepare("DELETE FROM user_preferences WHERE expires_at IS NOT NULL AND expires_at < ?").bind(now).run();
+  const observations = await c.env.DB.prepare("DELETE FROM listing_observations WHERE observed_at < ?").bind(new Date(Date.now() - 180 * 86_400_000).toISOString()).run();
+  const buckets = await c.env.DB.prepare("DELETE FROM rate_limit_buckets WHERE window_start < ?").bind(Math.floor(Date.now() / 60_000) - 60).run();
+  return c.json({
+    deletedPreferences: preferences.meta.changes ?? 0,
+    deletedObservations: observations.meta.changes ?? 0,
+    deletedRateLimitBuckets: buckets.meta.changes ?? 0,
+  });
+});
+
+/** Reports the authorization state of a source without exposing credentials. */
+app.get("/api/sources/:id/permission", async c => {
+  const result = await checkSourcePermission(c.env, c.req.param("id"));
+  if (!result.allowed) return c.json({ allowed:false, code:result.code, message:result.message });
+  const source = await loadSource(c.env, c.req.param("id"));
+  return c.json({
+    allowed:true,
+    source:{ id:source!.id, name:source!.name, kind:source!.kind, permissionStatus:source!.permissionStatus, permissionReviewedAt:source!.permissionReviewedAt ?? undefined },
+  });
 });
 
 export default app;

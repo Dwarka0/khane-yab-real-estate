@@ -7,6 +7,8 @@ export interface Env {
   RATE_LIMIT_PER_MINUTE?: string;
   MAX_LISTING_AGE_DAYS?: string;
   ALLOWED_ORIGINS?: string;
+  LINK_IMPORT_PER_HOUR?: string;
+  PREFERENCE_TTL_HOURS?: string;
 }
 
 export interface Preferences {
