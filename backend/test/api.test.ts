@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 import { FakeDatabase, fakeEnv } from "./fakeD1";
 
 const SALE_PAGE = `<!doctype html><html><head>

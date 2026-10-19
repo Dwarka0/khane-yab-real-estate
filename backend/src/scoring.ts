@@ -44,12 +44,21 @@ export interface ScoredListing<T extends ListingInput> {
 
 const normalized = (value: string) => value.trim().toLocaleLowerCase();
 
+/**
+ * A price of zero means "the source did not state a price" (FR-05: unknown is
+ * never zero). Such a listing is not a budget mismatch, but it also never
+ * earns the budget point.
+ */
+export const hasKnownPrice = (listing: { price?: number }): boolean => typeof listing.price === "number" && listing.price > 0;
+
 /** Hard eligibility constraints are applied before scoring so incompatible listings can never be recommended. */
 export function isEligibleListing<T extends ListingInput>(listing: T, prefs: Preferences): boolean {
   if (normalized(listing.transactionType) !== normalized(prefs.transactionType)) return false;
   if (prefs.city && normalized(listing.city) !== normalized(prefs.city)) return false;
-  if (prefs.budgetMin !== undefined && listing.price < prefs.budgetMin) return false;
-  if (prefs.budgetMax !== undefined && listing.price > prefs.budgetMax) return false;
+  if (hasKnownPrice(listing)) {
+    if (prefs.budgetMin !== undefined && listing.price < prefs.budgetMin) return false;
+    if (prefs.budgetMax !== undefined && listing.price > prefs.budgetMax) return false;
+  }
   if (prefs.propertyTypes.length && !prefs.propertyTypes.some(type => normalized(type) === normalized(listing.propertyType))) return false;
   if (prefs.minBedrooms !== undefined && (listing.bedrooms === undefined || listing.bedrooms < prefs.minBedrooms)) return false;
   if (prefs.minAreaM2 !== undefined && (listing.areaM2 === undefined || listing.areaM2 < prefs.minAreaM2)) return false;
@@ -65,7 +74,7 @@ export function isEligibleListing<T extends ListingInput>(listing: T, prefs: Pre
 /** Fields a seeker usually needs that the listing does not state. */
 export function missingKeyFields(listing: ListingInput): string[] {
   const missing: string[] = [];
-  if (listing.price === undefined) missing.push("price");
+  if (!hasKnownPrice(listing)) missing.push("price");
   if (listing.areaM2 === undefined) missing.push("area");
   if (listing.bedrooms === undefined) missing.push("bedrooms");
   if (!listing.neighborhood) missing.push("neighborhood");
@@ -85,7 +94,7 @@ export function scoreListing<T extends ListingInput>(listing: T, prefs: Preferen
   if (prefs.city) add(18, listing.city.toLocaleLowerCase() === prefs.city.toLocaleLowerCase(), "LOCATION_MATCH");
   if (prefs.neighborhoods.length) add(12, !!listing.neighborhood && prefs.neighborhoods.some(n => n.toLocaleLowerCase() === listing.neighborhood!.toLocaleLowerCase()), "NEIGHBORHOOD_MATCH");
   if (prefs.propertyTypes.length) add(10, prefs.propertyTypes.some(t => t.toLocaleLowerCase() === listing.propertyType.toLocaleLowerCase()), "PROPERTY_TYPE_MATCH");
-  if (prefs.budgetMax !== undefined) add(16, listing.price <= prefs.budgetMax && (prefs.budgetMin === undefined || listing.price >= prefs.budgetMin), "WITHIN_BUDGET");
+  if (prefs.budgetMax !== undefined && hasKnownPrice(listing)) add(16, listing.price <= prefs.budgetMax && (prefs.budgetMin === undefined || listing.price >= prefs.budgetMin), "WITHIN_BUDGET");
   if (prefs.minBedrooms !== undefined) add(8, (listing.bedrooms ?? -1) >= prefs.minBedrooms, "ROOMS_MATCH");
   if (prefs.minAreaM2 !== undefined) add(6, (listing.areaM2 ?? -1) >= prefs.minAreaM2, "AREA_MATCH");
   if (prefs.mustHave.length) add(6, prefs.mustHave.every(f => listing.features.some(x => x.toLowerCase() === f.toLowerCase())), "FEATURES_MATCH");

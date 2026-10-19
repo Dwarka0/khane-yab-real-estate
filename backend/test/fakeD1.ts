@@ -110,6 +110,7 @@ export class FakeDatabase {
   readonly ingestionRuns: Row[] = [];
   readonly importErrors: Row[] = [];
   readonly listingObservations: Row[] = [];
+  readonly sourcePages: Row[] = [];
   readonly rateLimitBuckets = new Map<string, Row>();
   readonly statements: string[] = [];
   rateCount = 0;
@@ -171,6 +172,7 @@ export class FakeDatabase {
       case "ingestion_runs": return this.ingestionRuns;
       case "import_errors": return this.importErrors;
       case "listing_observations": return this.listingObservations;
+      case "source_pages": return this.sourcePages;
       default: throw new Error(`Fake D1 has no table ${name}`);
     }
   }

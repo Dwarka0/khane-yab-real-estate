@@ -89,6 +89,18 @@ describe("validation and explainable scoring", () => {
     }
   });
 
+  it("treats a missing price as unknown rather than as a budget mismatch", () => {
+    const prefs = { transactionType:"buy" as const, city:"Tehran", budgetMin:50, budgetMax:200, propertyTypes:[], neighborhoods:[], mustHave:[], avoid:[] };
+    const unknownPrice = { ...sample, price: 0, city: "Tehran", transactionType: "buy" as const };
+    // A source that did not state a price is not a budget mismatch and never earns the budget point.
+    expect(isEligibleListing(unknownPrice, prefs)).toBe(true);
+    const scored = scoreListing(unknownPrice, prefs);
+    expect(scored.reasons).not.toContain("WITHIN_BUDGET");
+    expect(scored.reasons).toContain("MISSING_KEY_FIELDS");
+    // A price below the budget is still a mismatch.
+    expect(isEligibleListing({ ...unknownPrice, price: 10 }, prefs)).toBe(false);
+  });
+
   it("keeps the existing scoring function and ranking order for eligible listings", () => {
     const prefs = { transactionType:"buy" as const, city:"Tehran", propertyTypes:[], neighborhoods:[], mustHave:[], avoid:[] };
     const first = { ...sample, city:"TEHRAN", transactionType:"buy" as const, features:["parking"] };

@@ -13,3 +13,8 @@ APP_ENV = "production"
 RATE_LIMIT_PER_MINUTE = "60"
 MAX_LISTING_AGE_DAYS = "90"
 ALLOWED_ORIGINS = "https://khane-yab-web.pages.dev,https://khane-yab-mobile.pages.dev"
+
+# The collector refreshes the configured listing pages six times a day.
+# Each run makes one request per configured page and never crawls.
+[triggers]
+crons = ["23 */6 * * *"]

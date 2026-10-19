@@ -57,7 +57,7 @@ export function validateSourceUrl(raw: string, allowlist: string[]): ValidatedUr
   return { href: url.toString(), host };
 }
 
-async function readBounded(response: Response): Promise<string> {
+async function readBounded(response: Response, maxBytes: number): Promise<string> {
   const body = response.body;
   if (!body) return await response.text();
   const reader = body.getReader();
@@ -68,7 +68,7 @@ async function readBounded(response: Response): Promise<string> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_SOURCE_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel().catch(() => undefined);
       throw new Error("Source response exceeded the allowed size");
     }
@@ -78,10 +78,11 @@ async function readBounded(response: Response): Promise<string> {
 }
 
 /** Fetches a listing page while keeping every redirect inside the allowlist. */
-async function fetchSourcePage(
+export async function fetchSourcePage(
   startUrl: string,
   allowlist: string[],
   fetchImpl: FetchLike,
+  maxBytes: number = MAX_SOURCE_BYTES,
 ): Promise<{ html: string; finalUrl: string } | { error: string }> {
   let current = startUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -123,7 +124,7 @@ async function fetchSourcePage(
     }
     let html: string;
     try {
-      html = await readBounded(response);
+      html = await readBounded(response, maxBytes);
     } catch {
       return { error: "حجم صفحهٔ منبع بیش از حد مجاز است" };
     }

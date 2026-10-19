@@ -2,6 +2,38 @@
 
 All diagrams use Mermaid. The sections titled **Current implementation: …** record the implemented client/API flow. Every other diagram in this file is a **target-state design** unless its heading explicitly says otherwise; it may include proposed services, entities, controls, and fields that are not implemented. Do not read target diagrams as deployment evidence. Update the current-state diagrams when routes or response shapes change, and update target diagrams when the design changes.
 
+## Current implementation: scheduled collection
+
+```mermaid
+sequenceDiagram
+  actor Scheduler as Cron trigger
+  participant Worker as Worker scheduled handler
+  participant Guard as Source registry (permission gate)
+  participant Pages as source_pages
+  participant Page as Public category page
+  participant DB as D1 listings + observations
+  Scheduler->>Worker: cron fires (every 6 hours)
+  Worker->>Guard: check source enabled + permission approved
+  alt permission missing, disabled, or unapproved
+    Guard-->>Worker: refused (fail closed)
+  else allowed
+    Guard-->>Worker: source with host allowlist
+    Worker->>Pages: list the enabled pages
+    loop one request per page
+      Worker->>Page: GET the category page (no cookies, 2 MiB cap, 8 s timeout)
+      alt page cannot be read
+        Page-->>Worker: error or timeout
+        Worker->>Pages: record the error for this page
+      else page read
+        Page-->>Worker: HTML with structured listings
+        Worker->>Worker: extract title, price, rent, deposit, area, rooms, location, amenities
+        Worker->>DB: upsert listing + record observation
+        Worker->>Pages: record the outcome of the page
+      end
+    end
+  end
+```
+
 ## Current implementation: user-submitted listing link
 
 ```mermaid

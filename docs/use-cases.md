@@ -130,6 +130,35 @@ Each use case follows the Pressman format: actors, trigger, preconditions, a mai
 
 **Acceptance criteria:** TC-ING-06, TC-SEC-04.
 
+## UC-7 — Collect listings from the sources' own pages
+
+- **Primary actor:** the platform (scheduled job) · **Supporting actor:** the source's public category page · **Stakeholders:** seeker, operator, source owner
+- **Trigger:** the cron schedule fires (every six hours) or an operator calls `POST /api/collect`.
+- **Preconditions:** the collector source is registered, enabled, and approved; the pages to read are declared in `source_pages`.
+- **Priority:** high · **Frequency:** six times a day
+
+**Main success flow**
+
+1. The scheduler calls the collector.
+2. The collector checks the permission gate; a source that is missing, disabled, or unapproved refuses to run.
+3. The collector reads the enabled pages one by one, one request per page, with a 2 MiB budget, an 8 second timeout, no cookies, and no redirect outside the allowlist.
+4. The collector extracts the listings the page publishes: title, price, monthly rent, deposit, area, rooms, city, neighbourhood, amenities, and the link to the original listing.
+5. A page may restrict the result to categories (`category_filter`), so a general city page contributes only property listings.
+6. Each listing is stored once: an existing listing is updated and a new one is inserted, and every sighting is recorded as an observation.
+7. The collector records the outcome of the page in `source_pages` and closes the ingestion run.
+
+**Alternate flows**
+
+- 2a. The permission is missing → the run fails closed and nothing is fetched.
+- 3a. The page cannot be read, is too large, or times out → the page is marked with the error, the other pages continue, and no listing is touched.
+- 4a. A listing states no price → the price stays unknown; the listing is not a budget mismatch and never earns the budget point.
+
+**Postconditions:** the listings table holds the collected listings with their source links; the run history records what was inserted and updated.
+
+**Business rules:** the collector reads only the declared pages, follows the sources' `robots.txt`, keeps a low request rate, uses no account, bypasses no access control, stores only the fields needed for matching, and always links the user back to the source listing.
+
+**Acceptance criteria:** TC-ING-09, TC-ING-10, TC-SEC-07.
+
 ## UC-6 — Run maintenance cleanup
 
 - **Primary actor:** operator

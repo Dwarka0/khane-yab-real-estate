@@ -9,11 +9,12 @@ import { linkImportSchema, preferencesSchema, searchSchema } from "./validation"
 import { hourlyOperationLimit, rateLimit } from "./rateLimit";
 import { demoListings, importListings, IngestionPermissionError } from "./ingestion";
 import { importListingFromUrl } from "./linkImport";
+import { runCollection } from "./collectorRun";
 import { isEligibleListing, REASON_LABELS, scoreListing } from "./scoring";
 import { freshnessScore, isFresh } from "./listings";
 import { checkSourcePermission, loadSource } from "./sources";
 
-const app = new Hono<{ Bindings: Env; Variables: { requestId: string } }>();
+export const app = new Hono<{ Bindings: Env; Variables: { requestId: string } }>();
 app.use("/api/*", cors({
   origin: (origin, c) => {
     const allowed = (c.env.ALLOWED_ORIGINS ?? "").split(",").map((value: string) => value.trim()).filter(Boolean);
@@ -305,6 +306,43 @@ app.delete("/api/listings/:id", async c => {
   return c.json({ id, action: purge ? "purged" : "withdrawn", reason, runId });
 });
 
+/** Runs the collector now: reads the configured listing pages and stores what they publish. */
+app.post("/api/collect", async c => {
+  if (!isAdmin(c)) return fail(c, { code: "UNAUTHORIZED", message: "اجازه دسترسی ندارید" }, 401);
+  const maxPages = Math.max(1, Math.min(20, Number(c.req.query("maxPages")) || 20));
+  try {
+    const result = await runCollection(c.env, { maxPages });
+    return c.json({
+      runId: result.runId,
+      inserted: result.inserted,
+      updated: result.updated,
+      skipped: result.skipped,
+      pages: result.pages,
+    });
+  } catch (error) {
+    return fail(c, { code: "COLLECT_FAILED", message: error instanceof Error ? error.message : "جمع‌آوری انجام نشد" }, 500);
+  }
+});
+
+/** The pages the collector is allowed to read, with the outcome of the last run. */
+app.get("/api/collect/pages", async c => {
+  if (!isAdmin(c)) return fail(c, { code: "UNAUTHORIZED", message: "اجازه دسترسی ندارید" }, 401);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, url, label, transaction_type, category_filter, enabled, last_collected_at, last_status, last_item_count
+     FROM source_pages ORDER BY id`,
+  ).all<Record<string, unknown>>();
+  return c.json({
+    items: rows.results.map((row) => ({
+      id: String(row.id), url: String(row.url), label: row.label == null ? undefined : String(row.label),
+      transactionType: String(row.transaction_type), categoryFilter: row.category_filter == null ? undefined : String(row.category_filter),
+      enabled: Number(row.enabled) === 1,
+      lastCollectedAt: row.last_collected_at == null ? undefined : String(row.last_collected_at),
+      lastStatus: row.last_status == null ? undefined : String(row.last_status),
+      lastItemCount: row.last_item_count == null ? undefined : Number(row.last_item_count),
+    })),
+  });
+});
+
 /** Removes expired anonymous preferences and stale operational rows (FR-14). */app.post("/api/maintenance/cleanup", async c => {
   if (!isAdmin(c)) return fail(c, {code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}, 401);
   const now = new Date().toISOString();
@@ -329,4 +367,19 @@ app.get("/api/sources/:id/permission", async c => {
   });
 });
 
-export default app;
+/**
+ * The scheduled handler refreshes the configured listing pages on a low
+ * frequency. It never crawls: it reads the pages listed in `source_pages`,
+ * one request per page, and stores only the fields needed for matching.
+ */
+export default {
+  fetch: app.fetch,
+  scheduled: async (_event: ScheduledController, env: Env) => {
+    try {
+      const result = await runCollection(env);
+      console.log("collector_run", { runId: result.runId, inserted: result.inserted, updated: result.updated, pages: result.pages.length });
+    } catch (error) {
+      console.error("collector_error", { errorType: error instanceof Error ? error.name : "unknown" });
+    }
+  },
+};

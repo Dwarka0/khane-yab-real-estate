@@ -12,6 +12,20 @@ Cloudflare Workers API built with TypeScript, Hono, and D1. This directory is ba
 
 Do not commit `.dev.vars`, API tokens, or real credentials. Public listing sources must only be used through officially permitted APIs, licensed exports, user-submitted links, or manual imports. This backend contains no crawler and does not bypass login, robots rules, anti-bot checks, or other access controls.
 
+## The collector
+
+The worker reads the sources' own public category pages on a schedule and stores what they publish. It is not a crawler:
+
+- the pages it may read are declared one by one in the `source_pages` table and can be changed without a deployment;
+- it makes one request per page, six times a day (`[triggers] crons` in `wrangler.toml`), with a 2 MiB body budget, an 8 second timeout, and no cookies;
+- it follows the sources' `robots.txt` — both `divar.ir` and `sheypoor.com` allow the category and item paths it uses, and the collector never requests a path that is disallowed;
+- it uses no account and bypasses no access control;
+- it extracts only what the page publishes: title, price, monthly rent, deposit, area, rooms, city, neighbourhood, amenities, and the link back to the original listing.
+
+Two page shapes are supported: a `schema.org` product list (Divar) and a server-rendered item list with per-item attributes (Sheypoor). A page may also be restricted to categories with `category_filter`, which is how the general Divar city page is limited to property categories.
+
+The collector fails closed like every other path: without an approved source it refuses to run, and a page that cannot be read is recorded as an error in `source_pages.last_status` without touching the listings.
+
 ## Source registry and permission gate
 
 Every ingestion path is declared in the `sources` table (migration `0005_sources_observations.sql`). A source is usable only when it is **enabled** and its **permission status is `approved`**; the gate fails closed with `403 SOURCE_NOT_FOUND`, `403 SOURCE_DISABLED`, or `403 PERMISSION_NOT_APPROVED`.
@@ -37,6 +51,8 @@ JSON responses use UTF-8. Errors have `{ "error": { "code": "...", "message": ".
 | `GET /api/listings` | Filter active, fresh listings |
 | `POST /api/recommendations/:preferenceId` | Return ranked listings with score and Persian explanation reasons |
 | `POST /api/listings/import-link` | Import one listing page the user submitted (bounded fetch, allowlisted host) |
+| `POST /api/collect` | Run the collector now: read the configured listing pages and store what they publish; requires the admin token |
+| `GET /api/collect/pages` | The pages the collector may read, with the outcome of the last run; requires the admin token |
 | `DELETE /api/listings/:id` | Withdraw a listing, or purge it with `?purge=true`; requires the admin token |
 | `POST /api/ingest/manual` | Import up to 100 caller-provided listings; requires `Authorization: Bearer <ADMIN_INGEST_TOKEN>` |
 | `POST /api/ingest/demo` | Import built-in sample listings; requires the same admin token |

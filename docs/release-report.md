@@ -21,7 +21,7 @@ This report records what was actually executed for the release. A check is only 
 | Check | Command | Result |
 |---|---|---|
 | Backend type check | `npm run typecheck` | pass |
-| Backend tests | `npm test` | pass — 34 tests |
+| Backend tests | `npm test` | pass — 45 tests |
 | Backend dependency audit | `npm audit --audit-level=moderate` | pass — 0 vulnerabilities |
 | Web type check | `npm run typecheck` | pass |
 | Web production build | `npm run build` | pass — 242 kB bundle |
@@ -37,6 +37,9 @@ This report records what was actually executed for the release. A check is only 
 | Live listing import | `POST /api/listings/import-link` with a real listing page | pass — 201, real facts extracted |
 | Live recommendation | `PUT /api/preferences/:id` then `POST /api/recommendations/:id` | pass — score 100 with reasons |
 | Live rental import | `POST /api/listings/import-link` with a rental page | pass — monthly rent and deposit stored separately |
+| Live collection | `POST /api/collect` over six configured pages | pass — 41 listings inserted, 5 updated, 0 skipped; the pages report their outcome |
+| Live recommendations over collected listings | `PUT /api/preferences/:id` then `POST /api/recommendations/:id` | pass — 24 real listings returned with score 100 and their reasons |
+| Unknown price handling | a collected listing without a stated price | pass — it is not treated as a budget mismatch and never earns the budget point |
 | CORS policy | requests with allowed and foreign origins | pass — only the configured origins receive `Access-Control-Allow-Origin` |
 
 ## Performance measurement (NFR-03, TC-OPS-05)
