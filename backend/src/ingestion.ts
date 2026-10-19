@@ -34,12 +34,12 @@ export async function importListings(env: Env, adapter: "manual" | "demo", rawIt
         : null;
       const existing = existingBySource ?? await env.DB.prepare("SELECT id FROM listings WHERE content_hash = ? AND status = 'active' LIMIT 1").bind(contentHash).first<{id:string}>();
       if (existing) {
-        writes.push(env.DB.prepare(`UPDATE listings SET source_url=?, title=?, description=?, city=?, neighborhood=?, address=?, property_type=?, transaction_type=?, price=?, area_m2=?, bedrooms=?, bathrooms=?, latitude=?, longitude=?, features=?, published_at=?, last_seen_at=CURRENT_TIMESTAMP, content_hash=?, status='active', updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-          .bind(item.sourceUrl ?? null,item.title,item.description ?? "",item.city,item.neighborhood ?? null,item.address ?? null,item.propertyType,item.transactionType,item.price,item.areaM2 ?? null,item.bedrooms ?? null,item.bathrooms ?? null,item.latitude ?? null,item.longitude ?? null,JSON.stringify(item.features),item.publishedAt ?? null,contentHash,existing.id));
+        writes.push(env.DB.prepare(`UPDATE listings SET source_url=?, title=?, description=?, city=?, neighborhood=?, address=?, property_type=?, transaction_type=?, price=?, sale_price=?, monthly_rent=?, deposit=?, area_m2=?, bedrooms=?, bathrooms=?, latitude=?, longitude=?, features=?, published_at=?, last_seen_at=CURRENT_TIMESTAMP, content_hash=?, status='active', updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .bind(item.sourceUrl ?? null,item.title,item.description ?? "",item.city,item.neighborhood ?? null,item.address ?? null,item.propertyType,item.transactionType,item.price,item.salePrice ?? null,item.monthlyRent ?? null,item.deposit ?? null,item.areaM2 ?? null,item.bedrooms ?? null,item.bathrooms ?? null,item.latitude ?? null,item.longitude ?? null,JSON.stringify(item.features),item.publishedAt ?? null,contentHash,existing.id));
         updated++;
       } else {
-        writes.push(env.DB.prepare(`INSERT INTO listings(id,source,source_listing_id,source_url,title,description,city,neighborhood,address,property_type,transaction_type,price,area_m2,bedrooms,bathrooms,latitude,longitude,features,published_at,content_hash)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,item.source,item.sourceListingId ?? null,item.sourceUrl ?? null,item.title,item.description ?? "",item.city,item.neighborhood ?? null,item.address ?? null,item.propertyType,item.transactionType,item.price,item.areaM2 ?? null,item.bedrooms ?? null,item.bathrooms ?? null,item.latitude ?? null,item.longitude ?? null,JSON.stringify(item.features),item.publishedAt ?? null,contentHash));
+        writes.push(env.DB.prepare(`INSERT INTO listings(id,source,source_listing_id,source_url,title,description,city,neighborhood,address,property_type,transaction_type,price,sale_price,monthly_rent,deposit,area_m2,bedrooms,bathrooms,latitude,longitude,features,published_at,content_hash)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,item.source,item.sourceListingId ?? null,item.sourceUrl ?? null,item.title,item.description ?? "",item.city,item.neighborhood ?? null,item.address ?? null,item.propertyType,item.transactionType,item.price,item.salePrice ?? null,item.monthlyRent ?? null,item.deposit ?? null,item.areaM2 ?? null,item.bedrooms ?? null,item.bathrooms ?? null,item.latitude ?? null,item.longitude ?? null,JSON.stringify(item.features),item.publishedAt ?? null,contentHash));
         inserted++;
       }
     }
@@ -60,5 +60,5 @@ export async function importListings(env: Env, adapter: "manual" | "demo", rawIt
 
 export const demoListings: ListingInput[] = [
   { source:"demo", sourceListingId:"demo-001", title:"آپارتمان دوخوابه نورگیر", description:"نزدیک حمل‌ونقل عمومی و فروشگاه‌ها", city:"تهران", neighborhood:"صادقیه", propertyType:"apartment", transactionType:"buy", price:6500000000, areaM2:92, bedrooms:2, bathrooms:1, features:["elevator","parking","storage"] },
-  { source:"demo", sourceListingId:"demo-002", title:"واحد یک‌خوابه نزدیک پارک", description:"ساختمان کم‌واحد با نور مناسب", city:"تهران", neighborhood:"پونک", propertyType:"apartment", transactionType:"rent", price:180000000, areaM2:68, bedrooms:1, bathrooms:1, features:["elevator","balcony"] },
+  { source:"demo", sourceListingId:"demo-002", title:"واحد یک‌خوابه نزدیک پارک", description:"ساختمان کم‌واحد با نور مناسب", city:"تهران", neighborhood:"پونک", propertyType:"apartment", transactionType:"rent", price:180000000, monthlyRent:180000000, deposit:400000000, areaM2:68, bedrooms:1, bathrooms:1, features:["elevator","balcony"] },
 ];

@@ -34,6 +34,9 @@ export interface ListingInput {
   address?: string;
   propertyType: string;
   transactionType: TransactionType;
+  salePrice?: number;
+  monthlyRent?: number;
+  deposit?: number;
   price: number;
   areaM2?: number;
   bedrooms?: number;

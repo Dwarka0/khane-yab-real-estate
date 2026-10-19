@@ -31,6 +31,9 @@ export const listingSchema = z.object({
   propertyType: z.string().trim().min(1).max(80),
   transactionType: z.enum(["buy", "rent"]),
   price: z.number().finite().nonnegative().max(10_000_000_000_000),
+  salePrice: z.number().finite().nonnegative().max(10_000_000_000_000).optional(),
+  monthlyRent: z.number().finite().nonnegative().max(10_000_000_000_000).optional(),
+  deposit: z.number().finite().nonnegative().max(10_000_000_000_000).optional(),
   areaM2: optionalNonNegative,
   bedrooms: z.number().int().min(0).max(30).optional(),
   bathrooms: z.number().int().min(0).max(30).optional(),
@@ -38,6 +41,10 @@ export const listingSchema = z.object({
   longitude: z.number().finite().min(-180).max(180).optional(),
   features: stringList,
   publishedAt: z.string().datetime().optional(),
+}).superRefine((listing, ctx) => {
+  if (listing.transactionType === "buy" && listing.monthlyRent !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["monthlyRent"], message: "Sale listings cannot include monthlyRent" });
+  if (listing.transactionType === "rent" && listing.salePrice !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["salePrice"], message: "Rental listings cannot include salePrice" });
+  if (listing.transactionType === "buy" && listing.deposit !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["deposit"], message: "Sale listings cannot include rental deposit" });
 });
 
 export const searchSchema = z.object({

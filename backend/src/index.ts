@@ -27,7 +27,10 @@ app.onError((error, c) => {
     const tooLarge = error.status === 413;
     return c.json({ error: { code: tooLarge ? "PAYLOAD_TOO_LARGE" : "HTTP_ERROR", message: tooLarge ? "حجم درخواست بیشتر از حد مجاز است" : "درخواست قابل پردازش نیست" } }, error.status);
   }
-  console.error("api_error", { path: c.req.path, message: error.message });
+  // UUIDv4 values in preference/recommendation URL paths are bearer capabilities.
+  // Keep route-level observability without copying those identifiers into logs.
+  const safePath = c.req.path.replace(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig, ":id");
+  console.error("api_error", { path: safePath, errorType: error.name });
   return c.json({ error: { code: "INTERNAL_ERROR", message: "درخواست با خطا مواجه شد" } }, 500);
 });
 
@@ -69,7 +72,7 @@ app.get("/api/listings", async c => {
     id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url),
     title:String(r.title), description:String(r.description), city:String(r.city),
     neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type),
-    transactionType:String(r.transaction_type), price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2),
+    transactionType:String(r.transaction_type), price:Number(r.price), salePrice:r.sale_price == null ? undefined : Number(r.sale_price), monthlyRent:r.monthly_rent == null ? undefined : Number(r.monthly_rent), deposit:r.deposit == null ? undefined : Number(r.deposit), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2),
     bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms),
     features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at),
     last_seen_at:String(r.last_seen_at), freshnessScore:freshnessScore(String(r.last_seen_at)),
@@ -85,7 +88,7 @@ app.post("/api/recommendations/:preferenceId", async c => {
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
   const items = result.results.filter(r => isFresh(String(r.last_seen_at),maxAge)).map(r => ({
     row: r,
-    listing: { id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms), features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at), last_seen_at:String(r.last_seen_at) },
+    listing: { id:String(r.id), source:String(r.source), sourceUrl:r.source_url == null ? undefined : String(r.source_url), title:String(r.title), description:String(r.description), city:String(r.city), neighborhood:r.neighborhood == null ? undefined : String(r.neighborhood), propertyType:String(r.property_type), transactionType:String(r.transaction_type) as "buy"|"rent", price:Number(r.price), salePrice:r.sale_price == null ? undefined : Number(r.sale_price), monthlyRent:r.monthly_rent == null ? undefined : Number(r.monthly_rent), deposit:r.deposit == null ? undefined : Number(r.deposit), areaM2:r.area_m2 == null ? undefined : Number(r.area_m2), bedrooms:r.bedrooms == null ? undefined : Number(r.bedrooms), bathrooms:r.bathrooms == null ? undefined : Number(r.bathrooms), features:JSON.parse(String(r.features)) as string[], publishedAt:r.published_at == null ? undefined : String(r.published_at), last_seen_at:String(r.last_seen_at) },
   })).filter(({ listing }) => isEligibleListing(listing,prefs)).map(({ row, listing }) => ({
     ...scoreListing(listing,prefs), freshness:freshnessScore(String(row.last_seen_at)),
   })).sort((a,b) => b.score - a.score || b.freshness - a.freshness).slice(0,50);

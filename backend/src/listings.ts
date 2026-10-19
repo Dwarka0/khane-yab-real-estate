@@ -3,8 +3,12 @@ import type { ListingInput } from "./types";
 const normalizeText = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 
 export function normalizeListing(input: ListingInput): ListingInput {
+  const price = input.transactionType === "buy" ? (input.salePrice ?? input.price) : (input.monthlyRent ?? input.price);
   return {
     ...input,
+    price,
+    salePrice: input.transactionType === "buy" ? (input.salePrice ?? input.price) : undefined,
+    monthlyRent: input.transactionType === "rent" ? (input.monthlyRent ?? input.price) : undefined,
     source: normalizeText(input.source),
     title: input.title.normalize("NFKC").trim().replace(/\s+/g, " "),
     description: (input.description ?? "").normalize("NFKC").trim(),
@@ -18,7 +22,8 @@ export function normalizeListing(input: ListingInput): ListingInput {
 
 export async function hashListing(input: ListingInput): Promise<string> {
   const canonical = [input.transactionType, normalizeText(input.city), normalizeText(input.neighborhood ?? ""),
-    normalizeText(input.propertyType), Math.round(input.price), input.areaM2 ?? "", input.bedrooms ?? "",
+    normalizeText(input.propertyType), Math.round(input.transactionType === "buy" ? (input.salePrice ?? input.price) : (input.monthlyRent ?? input.price)),
+    input.transactionType === "rent" ? (input.deposit ?? "") : "", input.areaM2 ?? "", input.bedrooms ?? "",
     normalizeText(input.title)].join("|");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");

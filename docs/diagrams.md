@@ -1,6 +1,6 @@
 # System diagrams
 
-All diagrams use Mermaid and represent the proposed target design. Update them alongside implementation changes.
+All diagrams use Mermaid. The section titled **Current implementation: preference-to-recommendation sequence** records the implemented client/API flow. Every other diagram in this file is a **target-state design** unless its heading explicitly says otherwise; it may include proposed services, entities, controls, and fields that are not implemented. Do not read target diagrams as deployment evidence. Update the current-state diagram when routes or response shapes change, and update target diagrams when the design changes.
 
 ## Context
 
@@ -129,7 +129,34 @@ classDiagram
   Listing ..> Recommendation : candidate
 ```
 
-## Sequence: search
+## Current implementation: preference-to-recommendation sequence
+
+```mermaid
+sequenceDiagram
+  actor Seeker
+  participant Client as Web/mobile client
+  participant API as Cloudflare Worker API
+  participant Pref as D1 user_preferences
+  participant Listings as D1 listings
+  Seeker->>Client: Enter search criteria
+  Client->>API: PUT /api/preferences/{uuidv4}
+  API->>API: Validate UUIDv4 and preference schema
+  API->>Pref: INSERT ... ON CONFLICT DO NOTHING
+  alt UUID already used
+    API-->>Client: 409 PREFERENCE_ID_ALREADY_USED
+  else Created
+    API-->>Client: 200 with id and preferences
+    Client->>API: POST /api/recommendations/{uuidv4}
+    API->>Pref: SELECT preference by ID
+    Pref-->>API: Preference row
+    API->>Listings: Query active listings for transaction type
+    Listings-->>API: Candidate rows
+    API->>API: Apply freshness and hard eligibility filters; score and rank
+    API-->>Client: JSON { items: [{ listing, score, reasons }] }
+  end
+```
+
+## Sequence: search (target architecture)
 
 ```mermaid
 sequenceDiagram
@@ -140,7 +167,7 @@ sequenceDiagram
   participant Rank as Recommendation Service
   participant DB as D1
   User->>UI: Submit criteria
-  UI->>API: GET /api/v1/listings
+  UI->>API: GET /api/listings (target contract; current route has no /v1 prefix)
   API->>API: Validate and rate-limit
   API->>Repo: Find candidates
   Repo->>DB: Parameterized query

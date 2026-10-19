@@ -32,6 +32,21 @@ describe("validation and explainable scoring", () => {
     expect(listingSchema.safeParse({...sample,price:-1}).success).toBe(false);
     expect(listingSchema.safeParse({...sample,latitude:120}).success).toBe(false);
     expect(listingSchema.safeParse({...sample,sourceUrl:"http://example.com/listing"}).success).toBe(false);
+    expect(listingSchema.safeParse({...sample,transactionType:"rent",monthlyRent:20,deposit:100}).success).toBe(true);
+    expect(listingSchema.safeParse({...sample,transactionType:"rent",salePrice:100}).success).toBe(false);
+    expect(listingSchema.safeParse({...sample,deposit:100}).success).toBe(false);
+  });
+  it("normalizes rent to monthly rent while preserving the separate deposit", () => {
+    const rent = normalizeListing({ ...sample, transactionType:"rent", price:150, monthlyRent:90, deposit:500 });
+    expect(rent.price).toBe(90);
+    expect(rent.monthlyRent).toBe(90);
+    expect(rent.deposit).toBe(500);
+    expect(rent.salePrice).toBeUndefined();
+  });
+  it("includes rental deposit in the deduplication fingerprint", async () => {
+    const first = { ...sample, transactionType:"rent" as const, price:90, monthlyRent:90, deposit:300 };
+    const second = { ...first, deposit:400 };
+    expect(await hashListing(first)).not.toBe(await hashListing(second));
   });
   it("explains matching preferences and produces bounded score", () => {
     const result = scoreListing({...sample,source:"demo",city:"Tehran",propertyType:"apartment",features:["parking"]}, {

@@ -3,10 +3,12 @@
     "name": "خانه‌یاب",
     "slug": "khane-yab",
     "version": "1.0.0",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": { "supportsTablet": true, "bundleIdentifier": "ir.khaneyab.app" },
-    "android": { "package": "ir.khaneyab.app", "adaptiveIcon": { "backgroundColor": "#EAF3E9" } }
+    "android": { "package": "ir.khaneyab.app", "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#EAF3E9" } },
+    "splash": { "image": "./assets/splash.png", "resizeMode": "contain", "backgroundColor": "#F7F8F5" }
   }
 }

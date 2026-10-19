@@ -64,7 +64,7 @@ Maintain versioned, synthetic fixtures under the application's test fixture loca
 | ID | Test | Expected result |
 |---|---|---|
 | TC-API-01 | Send invalid enums, negative ranges, reversed min/max, malformed IDs, huge page size, and unknown sort fields. | Structured `400 VALIDATION_ERROR`; no SQL error or stack trace leaks. |
-| TC-API-02 | Request page boundaries and empty results. | Stable schema with correct totals/hasMore and a useful empty state. |
+| TC-API-02 | Request page boundaries and empty results. | **Target:** stable schema with correct totals/hasMore and a useful empty state. **Current gap:** `GET /api/listings` returns `limit`, `offset`, and `count`, while recommendations return a capped `items` array without pagination metadata. |
 | TC-API-03 | Call unknown routes and missing IDs. | Correct `404` envelope; no internal details. |
 | TC-API-04 | Submit invalid JSON/content type and excessive body size. | Structured 4xx response; request is not partially processed. |
 | TC-SEC-01 | Access admin/import routes without credentials and with insufficient permissions. | `401`/`403`; no protected data or side effect. |

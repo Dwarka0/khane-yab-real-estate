@@ -14,7 +14,7 @@ A Persian, right-to-left property discovery and recommendation platform designed
 
 - Web app: [https://khane-yab-web.pages.dev](https://khane-yab-web.pages.dev)
 - API health: [https://real-estate-platform-api.m-abner-9907.workers.dev/health](https://real-estate-platform-api.m-abner-9907.workers.dev/health)
-- API data: Cloudflare D1 database `khane-yab-platform`; migrations `0001_initial.sql`, `0002_demo_listings.sql`, and `0003_align_demo_seed.sql` are applied remotely.
+- API data: Cloudflare D1 database `khane-yab-platform`; migrations `0001_initial.sql` through `0004_separate_rental_prices.sql` are applied remotely.
 
 The web app and API have been deployed and smoke-tested. Demo listings are seeded and clearly marked as demo data. The protected manual-import endpoints remain disabled until `ADMIN_INGEST_TOKEN` is configured as a Cloudflare Worker secret; configure it before importing authorized external data.
 
@@ -42,6 +42,6 @@ Review the licensing decision before public release; no third-party listing cont
 ## Known pre-release limitations
 
 - No Divar or Sheypoor connector is enabled. Real listing ingestion requires an official API, licensed export, or documented authorization. Included listings are synthetic demo fixtures.
-- The mobile source typechecks and Expo exports an Android JavaScript bundle, but no installable APK/AAB has been produced because this environment has no Android SDK/device tooling.
+- The mobile source typechecks and Expo exports an Android JavaScript bundle. EAS preview (APK) and production (AAB) profiles and reproducible icon/splash assets are configured, but no installable APK/AAB has been produced because this environment has no Android SDK/ADB and EAS is not authenticated.
 - The current Expo SDK 58 dependency tree reports 15 high-severity `npm audit` findings in transitive Metro/Expo build-tooling packages (`braces` and `node-forge` advisories). The configured registry does not yet offer patched versions; `npm audit fix --force` proposes downgrading Expo to SDK 44, which breaks the current SDK. Re-audit before a signed mobile release; this is not marked security-clean.
-- Preference routes still need authenticated ownership before private saved profiles are supported. The current UI creates anonymous client-generated IDs and stores no account details.
+- Preference routes use UUIDv4 anonymous capabilities for non-sensitive search sessions; authenticated ownership is still required before private saved profiles are supported. The current UI stores no account details.

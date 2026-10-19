@@ -20,6 +20,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: npx wrangler d1 migrations apply khane-yab-platform --local
+      - run: npx wrangler deploy --dry-run
       - run: npm audit --audit-level=moderate
 
   web:
@@ -52,4 +54,8 @@ jobs:
           cache-dependency-path: web-mobile/mobile/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run assets:generate
       - run: npx expo export --platform android
+      - name: Report known Expo/Metro advisories
+        run: npm audit --audit-level=high
+        continue-on-error: true
