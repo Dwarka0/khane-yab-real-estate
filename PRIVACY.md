@@ -16,7 +16,7 @@ Effective date: 2026-10-19. This notice describes what the platform stores, why,
 ## What the platform does not store
 
 - No accounts, no names, no phone numbers, no email addresses, no national identifiers.
-- **The profile stays on the device.** The web and mobile clients keep the search criteria and the saved listings in the device's own storage (the browser's local storage or the app's storage). The profile is never uploaded as a profile, needs no login, and can be erased from the interface. Only the short-lived anonymous search capability travels with a search.
+- **The memory stays on the device.** The web and mobile clients keep the search criteria, the listings they fetched, the favourites, and the hints the app derives from what was saved in the device's own storage (the browser's local storage or the app's storage). It is never uploaded as a profile, needs no login, and can be erased from the interface. Only the short-lived anonymous search capability travels with a search, and the server keeps a short-lived cache of the pages it read, never the seeker's memory.
 - No cookies for tracking, no advertising identifiers, no third-party analytics.
 - No payment details; the platform is not a transaction system.
 - The favourites ("saved") list in the web and mobile clients lives in the browser or device memory only and is never uploaded.

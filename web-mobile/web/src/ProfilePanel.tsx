@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, CircleHelp, Heart, MapPin, Trash2, Wallet, X } from 'lucide-react';
+import { Check, CircleHelp, Heart, MapPin, Sparkles, Trash2, Wallet, X } from 'lucide-react';
 import { clearProfile, saveProfile, type DeviceProfile } from './profile';
 
 const money = (value: number) => new Intl.NumberFormat('fa-IR').format(value);
@@ -90,11 +90,27 @@ export default function ProfilePanel({ profile, onChange, onClose, onApply }: Pr
 
       <div className="profile-actions">
         <button className="search-button" onClick={persist}><Check size={16} /> ذخیره روی این دستگاه</button>
-        <button className="search-button secondary" onClick={wipe}><Trash2 size={16} /> پاک کردن پروفایل</button>
+        <button className="search-button secondary" onClick={wipe}><Trash2 size={16} /> پاک کردن حافظهٔ این دستگاه</button>
+        {profile.learned.budgetMax !== undefined && <button className="search-button secondary" onClick={() => { setBudgetMax(profile.learned.budgetMax!); setMinAreaM2(profile.learned.minAreaM2 ?? minAreaM2); setMinBedrooms(profile.learned.minBedrooms ?? minBedrooms); setNotice('مقادیر یادگرفته‌شده اعمال شد.'); }}><Sparkles size={16} /> اعمال چیزهایی که یاد گرفته</button>}
       </div>
       {notice && <p className="profile-saved"><Check size={15} /> {notice}</p>}
 
+      <div className="profile-learned">
+        <b>آنچه دستگاه از شما یاد گرفته</b>
+        {profile.learned.samples > 0
+          ? <ul>
+              {profile.learned.cities.length > 0 && <li>شهرهای موردعلاقه: {profile.learned.cities.join('، ')}</li>}
+              {profile.learned.budgetMax !== undefined && <li>بودجهٔ رایج: {compactMoney(profile.learned.budgetMax)} تومان</li>}
+              {profile.learned.minAreaM2 !== undefined && <li>حداقل متراژ: {money(profile.learned.minAreaM2)} متر</li>}
+              {profile.learned.minBedrooms !== undefined && <li>تعداد اتاق: {money(profile.learned.minBedrooms)}</li>}
+              <li>بر اساس {money(profile.learned.samples)} آگهی ذخیره‌شده</li>
+            </ul>
+          : <p className="profile-empty">هنوز چیزی یاد نگرفته است. وقتی آگهی‌ای را ذخیره می‌کنید، دستگاه شهر، بودجه، متراژ و تعداد اتاق موردعلاقهٔ شما را یاد می‌گیرد.</p>}
+      </div>
+
       <div className="profile-saved-list">
+        <b>حافظهٔ محلی دستگاه ({money(profile.cache.length)} آگهی)</b>
+        <p className="profile-empty">این آگهی‌ها روی همین دستگاه نگه داشته می‌شوند تا بدون اینترنت هم دیده شوند. سرور آن‌ها را نگه نمی‌دارد.</p>
         <b>آگهی‌های ذخیره‌شده روی این دستگاه ({money(profile.savedListings.length)})</b>
         {profile.savedListings.length === 0
           ? <p className="profile-empty">هنوز آگهی‌ای ذخیره نکرده‌اید. با زدن نشان قلب روی هر کارت، آگهی همین‌جا ذخیره می‌شود.</p>

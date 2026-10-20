@@ -53,6 +53,19 @@ function evaluate(row: Row, condition: string, value: unknown): boolean {
     const isNull = cell === null || cell === undefined;
     return nullCheck[2] ? !isNull : isNull;
   }
+  // A compound condition such as "(expires_at IS NULL OR expires_at > ?)".
+  const compound = /^\(\s*([a-z_]+)\s+IS\s+NULL\s+OR\s+([a-z_]+)\s*(>=|<=|>|<|=)\s*\?\s*\)$/i.exec(condition.trim());
+  if (compound) {
+    const cell = row[compound[1]!];
+    if (cell === null || cell === undefined) return true;
+    const left = Number(cell);
+    const right = Number(value);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+    if (compound[3] === ">=") return left >= right;
+    if (compound[3] === "<=") return left <= right;
+    if (compound[3] === ">") return left > right;
+    return left === right;
+  }
   const match = /^([a-z_]+)\s*(COLLATE NOCASE)?\s*(>=|<=|!=|<>|=|>|<|LIKE)\s*(\?|'[^']*'|-?\d+(?:\.\d+)?)$/i.exec(condition.trim());
   if (!match) throw new Error(`Fake D1 cannot evaluate condition: ${condition}`);
   const column = match[1]!;
@@ -111,6 +124,7 @@ export class FakeDatabase {
   readonly importErrors: Row[] = [];
   readonly listingObservations: Row[] = [];
   readonly sourcePages: Row[] = [];
+  readonly pageCache: Row[] = [];
   readonly rateLimitBuckets = new Map<string, Row>();
   readonly statements: string[] = [];
   rateCount = 0;
@@ -173,6 +187,7 @@ export class FakeDatabase {
       case "import_errors": return this.importErrors;
       case "listing_observations": return this.listingObservations;
       case "source_pages": return this.sourcePages;
+      case "page_cache": return this.pageCache;
       default: throw new Error(`Fake D1 has no table ${name}`);
     }
   }
@@ -212,10 +227,14 @@ export class FakeDatabase {
     if (!columnsMatch) throw new Error(`Fake D1 cannot read columns from: ${sql}`);
     const columns = columnsMatch[1]!.split(",").map((column) => column.trim());
     const valuesMatch = /VALUES\s*\(([^)]*)\)/i.exec(sql);
-    const placeholders = valuesMatch ? valuesMatch[1]!.split(",").length : columns.length;
+    const entries = valuesMatch ? valuesMatch[1]!.split(",").map((entry) => entry.trim()) : [];
     const row: Row = {};
+    let valueIndex = 0;
     for (let index = 0; index < columns.length; index++) {
-      row[columns[index]!] = index < placeholders ? values[index] ?? null : null;
+      const entry = entries[index];
+      if (entry === "?") { row[columns[index]!] = valueIndex < values.length ? values[valueIndex++] ?? null : null; continue; }
+      if (!entry || /^CURRENT_TIMESTAMP$/i.test(entry)) { row[columns[index]!] = new Date().toISOString().replace("T", " ").slice(0, 19); continue; }
+      row[columns[index]!] = entry.replace(/^'|'$/g, "");
     }
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
     if (!row.created_at) row.created_at = now;

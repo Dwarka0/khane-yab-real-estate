@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpLeft, BadgeCheck, BedDouble, Building2, Check, ChevronDown, CircleHelp, Heart, Home, MapPin, Ruler, Search, SlidersHorizontal, Sparkles, Wallet } from 'lucide-react';
 import ProfilePanel from './ProfilePanel';
-import { loadProfile, toggleSaved, type DeviceProfile } from './profile';
+import { learnFromSaved, loadProfile, rememberListings, toggleSaved, type DeviceProfile } from './profile';
 
-type Listing = { id: string; title: string; city: string; neighborhood: string; price: number; salePrice?: number; monthlyRent?: number; deposit?: number; area: number; rooms: number; kind: 'buy' | 'rent'; source: string; url?: string; updatedAt: string; verified: boolean; stale?: boolean; score?: number; reasons?: string[]; image?: string };
+type Listing = { id: string; title: string; city: string; neighborhood: string; price: number; salePrice?: number; monthlyRent?: number; deposit?: number; area: number; rooms: number; kind: 'buy' | 'rent'; source: string; url?: string; updatedAt: string; verified: boolean; stale?: boolean; fresh?: boolean; score?: number; reasons?: string[]; image?: string };
 type ApiListing = { id: string; title: string; city: string; neighborhood?: string; price: number; salePrice?: number; monthlyRent?: number; deposit?: number; areaM2?: number; bedrooms?: number; transactionType: 'buy' | 'rent'; source: string; sourceUrl?: string; last_seen_at?: string; stale?: boolean; score: number; reasons: string[] };
 /** The API returns stable reason codes; this map localizes them for the interface. */
 const REASON_LABELS: Record<string, string> = {
@@ -80,7 +80,7 @@ export default function App() {
   function toggleSave(item: Listing) {
     setProfile((current) => {
       if (!current) return current;
-      const next = toggleSaved(current, { id: item.id, title: item.title, source: item.source, url: item.url, price: item.price, city: item.city });
+      const next = learnFromSaved(toggleSaved(current, { id: item.id, title: item.title, source: item.source, url: item.url, price: item.price, city: item.city, areaM2: item.area, bedrooms: item.rooms }));
       setSaved(next.savedListings.map((entry) => entry.id));
       return next;
     });
@@ -90,15 +90,18 @@ export default function App() {
     setLoading(true); setNotice('');
     if (apiBase) {
       try {
-        const preferenceId = crypto.randomUUID();
-        const preferences = { transactionType: kind, city, neighborhoods: neighborhood === 'همه‌ی محله‌ها' ? [] : [neighborhood], budgetMax: budget, minAreaM2: area, minBedrooms: Number(rooms[0]), propertyTypes: [propertyType] };
-        const savedPreferences = await fetch(`${apiBase}/api/preferences/${preferenceId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preferences) });
-        if (!savedPreferences.ok) throw new Error(`Preferences HTTP ${savedPreferences.status}`);
-        const response = await fetch(`${apiBase}/api/recommendations/${preferenceId}`, { method: 'POST' });
+        // The search happens now: the server reads the source pages and
+        // answers with the matches, and the device keeps a copy of them.
+        const criteria = { transactionType: kind, city, neighborhoods: neighborhood === 'همه‌ی محله‌ها' ? [] : [neighborhood], budgetMax: budget, minAreaM2: area, minBedrooms: Number(rooms[0]), propertyTypes: [propertyType], mustHave: [], avoid: [] };
+        const response = await fetch(`${apiBase}/api/search/live`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(criteria) });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json() as { items?: Array<{ listing: ApiListing; score: number; reasons: string[]; reasonLabels?: string[]; freshness?: number }> };
-        setApiResults((data.items ?? []).map(({ listing, score, reasons, reasonLabels }) => ({ id: listing.id, title: listing.title, city: listing.city, neighborhood: listing.neighborhood ?? 'محله ثبت نشده', price: listing.transactionType === 'rent' ? (listing.monthlyRent ?? listing.price) : (listing.salePrice ?? listing.price), salePrice: listing.salePrice, monthlyRent: listing.monthlyRent, deposit: listing.deposit, area: listing.areaM2 ?? 0, rooms: listing.bedrooms ?? 0, kind: listing.transactionType, source: listing.source, url: listing.sourceUrl, updatedAt: listing.last_seen_at ? new Date(listing.last_seen_at).toLocaleDateString('fa-IR') : 'زمان نامشخص', verified: false, stale: listing.stale, score, reasons: reasonLabels?.length ? reasonLabels : reasons.map((code) => REASON_LABELS[code] ?? code) })));
-        setNotice('نتایج از سرویس جست‌وجو دریافت شد. وضعیت هر آگهی را پیش از تماس بررسی کنید.');
+        const data = await response.json() as { notes?: string[]; fetchedAt?: string; total?: number; items?: Array<{ listing: ApiListing; score: number; reasons: string[]; reasonLabels?: string[] }> };
+        const fetchedAt = data.fetchedAt ?? new Date().toISOString();
+        const mapped = (data.items ?? []).map(({ listing, score, reasons, reasonLabels }) => ({ id: listing.id, title: listing.title, city: listing.city, neighborhood: listing.neighborhood ?? 'محله ثبت نشده', price: listing.transactionType === 'rent' ? (listing.monthlyRent ?? listing.price) : (listing.salePrice ?? listing.price), salePrice: listing.salePrice, monthlyRent: listing.monthlyRent, deposit: listing.deposit, area: listing.areaM2 ?? 0, rooms: listing.bedrooms ?? 0, kind: listing.transactionType, source: listing.source, url: listing.sourceUrl, updatedAt: new Date(fetchedAt).toLocaleDateString('fa-IR'), verified: false, stale: listing.stale, fresh: true, score, reasons: reasonLabels?.length ? reasonLabels : reasons.map((code) => REASON_LABELS[code] ?? code) }));
+        setApiResults(mapped);
+        setProfile((current) => current ? rememberListings(current, mapped.map((item) => ({ id: item.id, title: item.title, source: item.source, url: item.url, city: item.city, neighborhood: item.neighborhood, price: item.price, areaM2: item.area, bedrooms: item.rooms, propertyType: propertyType, transactionType: item.kind, score: item.score ?? 0, reasons: item.reasons ?? [], fetchedAt }))) : current);
+        const notes = data.notes ?? [];
+        setNotice([`${data.total ?? mapped.length} آگهی همین حالا از دیوار و شیپور خوانده شد و روی همین دستگاه نگه داشته شد.`, ...notes].join(' '));
       } catch { setApiResults(null); setNotice('ارتباط با سرویس برقرار نشد؛ فعلاً نمونه‌های نمایشی را می‌بینید.'); }
     } else {
       setApiResults(null); setNotice('این‌ها آگهی‌های نمونه برای نمایش رابط کاربری هستند؛ هنوز آگهی واقعی از دیوار یا شیپور دریافت نشده است.');

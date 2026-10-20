@@ -38,6 +38,8 @@ This report records what was actually executed for the release. A check is only 
 | Live recommendation | `PUT /api/preferences/:id` then `POST /api/recommendations/:id` | pass — score 100 with reasons |
 | Live rental import | `POST /api/listings/import-link` with a rental page | pass — monthly rent and deposit stored separately |
 | Live collection | `POST /api/collect` over the configured pages | pass — 109 listings inserted and 28 updated in one run; the pages report their outcome and how many listing pages were read |
+| Live search | `POST /api/search/live` with the criteria of a seeker | pass — 22 real Divar listings matched in 11 seconds; the repeated search answered from the cache in 4.5 seconds without asking the source again |
+| No permanent storage | the database after a search | pass — every collected row carries an expiry, only the three synthetic demo fixtures stay, and the 866 permanently stored rows of the earlier versions were removed |
 | Divar extraction | the Divar category pages and their listing pages | pass — 189 Divar listings stored, of which the area, the rooms, the coordinates, and the city are read from the category page and the price from the listing page |
 | Live recommendations over collected listings | `PUT /api/preferences/:id` then `POST /api/recommendations/:id` | pass — 30 real listings returned with score 100 and their reasons |
 | Unknown price handling | a collected listing without a stated price | pass — it is not treated as a budget mismatch and never earns the budget point |

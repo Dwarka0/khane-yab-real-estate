@@ -1,10 +1,10 @@
 /**
- * Device-local profile.
+ * Device-local memory.
  *
- * The profile never leaves the device: it is stored in the browser's own
- * storage, needs no account, and is sent with a search only as the short
- * lived anonymous criteria the API already accepts. Saved listings are kept
- * here as well, so the favourites list also works without a login.
+ * The platform does not keep the listing data: a search reads the sources at
+ * that moment. What the seeker learns stays on the device. This module holds
+ * the profile, the listings that were fetched, and the hints the app derives
+ * from what the seeker saved.
  */
 
 export type DeviceProfile = {
@@ -21,6 +21,11 @@ export type DeviceProfile = {
   mustHave: string[];
   avoid: string[];
   savedListings: SavedListing[];
+  /** What the device has learned about what the seeker looks for. */
+  learned: LearnedHints;
+  /** The listings the device has seen, with the moment they were seen. */
+  cache: CachedListing[];
+  lastSearch?: { at: string; total: number; city?: string; transactionType: string };
   updatedAt: string;
 };
 
@@ -31,10 +36,39 @@ export type SavedListing = {
   url?: string;
   price?: number;
   city?: string;
+  areaM2?: number;
+  bedrooms?: number;
   savedAt?: string;
 };
 
+export type CachedListing = {
+  id: string;
+  title: string;
+  source: string;
+  url?: string;
+  city?: string;
+  neighborhood?: string;
+  price: number;
+  areaM2?: number;
+  bedrooms?: number;
+  propertyType: string;
+  transactionType: string;
+  score: number;
+  reasons: string[];
+  fetchedAt: string;
+};
+
+export type LearnedHints = {
+  cities: string[];
+  propertyTypes: string[];
+  budgetMax?: number;
+  minAreaM2?: number;
+  minBedrooms?: number;
+  samples: number;
+};
+
 const STORAGE_KEY = 'khane-yab.profile.v1';
+const MAX_CACHE = 200;
 
 export const defaultProfile = (): DeviceProfile => ({
   version: 1,
@@ -49,6 +83,8 @@ export const defaultProfile = (): DeviceProfile => ({
   mustHave: [],
   avoid: [],
   savedListings: [],
+  learned: { cities: [], propertyTypes: [], samples: 0 },
+  cache: [],
   updatedAt: new Date().toISOString(),
 });
 
@@ -57,7 +93,7 @@ const randomDeviceId = (): string => {
   return `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
-/** Reads the profile from the device, repairing anything unreadable. */
+/** Reads the memory of the device, repairing anything unreadable. */
 export function loadProfile(): DeviceProfile {
   const fallback = defaultProfile();
   if (typeof localStorage === 'undefined') return { ...fallback, deviceId: randomDeviceId() };
@@ -79,6 +115,8 @@ export function loadProfile(): DeviceProfile {
       mustHave: Array.isArray(parsed.mustHave) ? parsed.mustHave : [],
       avoid: Array.isArray(parsed.avoid) ? parsed.avoid : [],
       savedListings: Array.isArray(parsed.savedListings) ? parsed.savedListings : [],
+      cache: Array.isArray(parsed.cache) ? parsed.cache : [],
+      learned: { ...fallback.learned, ...(parsed.learned ?? {}) },
     };
   } catch {
     const created = { ...fallback, deviceId: randomDeviceId() };
@@ -87,7 +125,7 @@ export function loadProfile(): DeviceProfile {
   }
 }
 
-/** Writes the profile to the device. */
+/** Writes the memory of the device. */
 export function saveProfile(profile: DeviceProfile): void {
   if (typeof localStorage === 'undefined') return;
   try {
@@ -97,7 +135,7 @@ export function saveProfile(profile: DeviceProfile): void {
   }
 }
 
-/** Removes the profile and everything it holds from the device. */
+/** Removes the profile, the favourites, and the local cache from the device. */
 export function clearProfile(): void {
   if (typeof localStorage === 'undefined') return;
   try {
@@ -114,6 +152,43 @@ export function toggleSaved(profile: DeviceProfile, listing: SavedListing): Devi
     ? profile.savedListings.filter((item) => item.id !== listing.id)
     : [{ ...listing, savedAt: new Date().toISOString() }, ...profile.savedListings].slice(0, 100);
   const next = { ...profile, savedListings, updatedAt: new Date().toISOString() };
+  saveProfile(next);
+  return next;
+}
+
+/**
+ * Learns from the listings the seeker saved: the cities, the property types,
+ * the budget, the area, and the room count that appear most often become the
+ * hints the app suggests next time.
+ */
+export function learnFromSaved(profile: DeviceProfile): DeviceProfile {
+  const samples = profile.savedListings.filter((item) => item.price && item.price > 0);
+  if (samples.length === 0) {
+    return { ...profile, learned: { ...profile.learned, samples: profile.learned.samples } };
+  }
+  const cities = [...new Set(profile.savedListings.map((item) => item.city).filter(Boolean) as string[])];
+  const prices = samples.map((item) => item.price).filter((price): price is number => Boolean(price)).sort((a, b) => a - b);
+  const areas = samples.map((item) => item.areaM2).filter(Boolean) as number[];
+  const rooms = samples.map((item) => item.bedrooms).filter((value) => value !== undefined) as number[];
+  const learned: LearnedHints = {
+    cities,
+    propertyTypes: profile.learned.propertyTypes,
+    budgetMax: prices[Math.floor(prices.length / 2)],
+    minAreaM2: areas.length ? Math.min(...areas) : undefined,
+    minBedrooms: rooms.length ? Math.max(...rooms) : undefined,
+    samples: profile.learned.samples + samples.length,
+  };
+  const next = { ...profile, learned, updatedAt: new Date().toISOString() };
+  saveProfile(next);
+  return next;
+}
+
+/** Stores the listings a search returned on the device. */
+export function rememberListings(profile: DeviceProfile, listings: CachedListing[]): DeviceProfile {
+  const merged = new Map<string, CachedListing>();
+  for (const item of profile.cache) merged.set(item.id, item);
+  for (const item of listings) merged.set(item.id, item);
+  const cache = [...merged.values()].sort((a, b) => (b.fetchedAt > a.fetchedAt ? 1 : -1)).slice(0, MAX_CACHE);  const next = { ...profile, cache, updatedAt: new Date().toISOString() };
   saveProfile(next);
   return next;
 }

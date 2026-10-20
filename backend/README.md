@@ -12,25 +12,28 @@ Cloudflare Workers API built with TypeScript, Hono, and D1. This directory is ba
 
 Do not commit `.dev.vars`, API tokens, or real credentials. Public listing sources must only be used through officially permitted APIs, licensed exports, user-submitted links, or manual imports. This backend contains no crawler and does not bypass login, robots rules, anti-bot checks, or other access controls.
 
-## The collector
+## The search reads the source pages
 
-The worker reads the sources' own public category pages on a schedule and stores what they publish. It is not a crawler:
+`POST /api/search/live` takes the criteria of the seeker, picks the source pages that match them, reads those pages, and answers with the listings that fit. The search happens at that moment: nothing is harvested in the background.
 
 - the pages it may read are declared one by one in the `source_pages` table and can be changed without a deployment;
-- it makes one request per page, six times a day (`[triggers] crons` in `wrangler.toml`), with a 2 MiB body budget, an 8 second timeout, and no cookies;
-- it follows the sources' `robots.txt` — both `divar.ir` and `sheypoor.com` allow the category and item paths it uses, and the collector never requests a path that is disallowed;
-- it uses no account and bypasses no access control;
+- it makes one request per page with a 2 MiB body budget, an 8 second timeout, and no cookies, and it pauses between two pages;
+- it follows the sources' `robots.txt`, uses no account, and bypasses no access control;
 - it extracts only what the page publishes: title, price, monthly rent, deposit, area, rooms, city, neighbourhood, amenities, and the link back to the original listing.
 
 Two page shapes are supported: a `schema.org` product list and a server-rendered item list with per-item attributes. A page may also be restricted to categories with `category_filter`.
 
-**Divar is read in two steps.** A Divar category page carries the whole result list of that category in its embedded data — title, link, area, room count, coordinates, city, district, and category — but not the price. The price lives on the listing page, so a page configured with `follow_detail` reads a small number of listing pages as well, with a pause between every request, and only for the listings that do not have a price yet. The budget moves on to the next listings in the following runs instead of repeating the same ones.
+**Divar is read in two steps.** A Divar category page carries the whole result list of that category in the data the page embeds — title, link, area, room count, coordinates, city, district, and category — but not the price. The price lives on the listing page, so a page configured with `follow_detail` reads a small number of listing pages as well, with a pause between every request, and only for the listings that do not have a price yet. The budget moves on to the next listings in the following runs instead of repeating the same ones.
 
 **Sheypoor is read in one step.** Its category page already carries the price, the monthly rent, the deposit, the area, the rooms, and the amenities, so no listing page is read for it.
 
-The collector keeps a low request rate: a four second pause between two pages, another four seconds between two listing pages, and it stops using a source for the rest of the run as soon as the source asks for a slower rate. A run therefore makes a few dozen requests over a few minutes, six times a day.
+The search keeps a low request rate: four seconds between two pages, four seconds between two listing pages, and it stops using a source for the rest of the run as soon as the source asks for a slower rate.
 
-The collector fails closed like every other path: without an approved source it refuses to run, and a page that cannot be read is recorded as an error in `source_pages.last_status` without touching the listings.
+## The server keeps a cache, not a store
+
+What a search reads is kept in a two hour cache so a repeated search does not ask the source again. Every cached listing carries an `expires_at`, and an hourly scheduled job removes what expired; the maintenance endpoint does the same on demand. A row without an expiry is a synthetic demo fixture.
+
+The earlier versions of the platform stored every collected listing permanently. Those 866 rows were removed from the database, and the collector that filled them in the background was replaced by the on-demand search.
 
 ## Source registry and permission gate
 
@@ -56,6 +59,7 @@ JSON responses use UTF-8. Errors have `{ "error": { "code": "...", "message": ".
 | `PUT /api/preferences/:id` | Create anonymous search preferences using an unused UUIDv4 capability; repeated IDs return `409` |
 | `GET /api/listings` | Filter active, fresh listings |
 | `POST /api/recommendations/:preferenceId` | Return ranked listings with score and Persian explanation reasons |
+| `POST /api/search/live` | Search the sources now for the criteria of the seeker and return the matching listings |
 | `POST /api/listings/import-link` | Import one listing page the user submitted (bounded fetch, allowlisted host) |
 | `POST /api/collect` | Run the collector now: read the configured listing pages and store what they publish; requires the admin token |
 | `GET /api/collect/pages` | The pages the collector may read, with the outcome of the last run; requires the admin token |

@@ -4,9 +4,10 @@ import { fetchSourcePage, type FetchLike } from "./linkImport";
 import { upsertListing } from "./listingStore";
 import { listingSchema } from "./validation";
 import { checkSourcePermission, hostAllowlist, SOURCE_USER_LINK } from "./sources";
-import type { Env, ListingInput } from "./types";
+import { listSourcePages, toListingInput, SOURCE_COLLECTOR, type SourcePageRow } from "./liveSearch";
+import type { Env } from "./types";
 
-export const SOURCE_COLLECTOR = "src-collector";
+export { SOURCE_COLLECTOR } from "./liveSearch";
 
 /** A category page carries many listings, so it needs a larger body budget than a single item page. */
 export const COLLECTOR_MAX_BYTES = 2 * 1024 * 1024;
@@ -18,18 +19,6 @@ export const DETAIL_DELAY_MS = 4000;
 export const PAGE_DELAY_MS = 4000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-export interface SourcePageRow {
-  id: string;
-  source_id: string;
-  url: string;
-  label: string | null;
-  transaction_type: "buy" | "rent";
-  category_filter: string | null;
-  enabled: number;
-  follow_detail: number;
-  detail_limit: number;
-}
 
 export interface PageResult {
   pageId: string;
@@ -63,51 +52,6 @@ export function matchesCategoryFilter(category: string | undefined, filter: stri
   return wanted.some((needle) => category.includes(needle));
 }
 
-/** Turns a collected item into a validated listing input. */
-export function toListingInput(item: CollectedItem, page: SourcePageRow): ListingInput {
-  const category = item.category ?? "";
-  const categorySaysRent = /اجاره|رهن/.test(category);
-  const categorySaysBuy = /فروش|خرید/.test(category);
-  // The item's own category wins: a general city page mixes sale and rent.
-  const isRent = item.transactionType === "rent" || categorySaysRent || (page.transaction_type === "rent" && !categorySaysBuy);
-  const price = isRent ? (item.monthlyRent ?? 0) : (item.price ?? 0);
-  return {
-    source: new URL(item.url).hostname.replace(/^www\./, ""),
-    sourceListingId: item.sourceListingId,
-    sourceUrl: item.url,
-    title: item.title.slice(0, 240),
-    description: (item.description ?? "").slice(0, 10000),
-    city: (item.city ?? "نامشخص").slice(0, 120),
-    neighborhood: item.neighborhood?.slice(0, 120),
-    propertyType: (item.propertyType ?? item.category ?? "unknown").slice(0, 80),    transactionType: isRent ? "rent" : "buy",
-    price,
-    salePrice: isRent ? undefined : (price || undefined),
-    monthlyRent: isRent ? (price || undefined) : undefined,
-    deposit: isRent ? item.deposit : undefined,
-    areaM2: item.areaM2,
-    bedrooms: item.bedrooms,
-    features: item.features.slice(0, 30),
-  };
-}
-
-export async function listSourcePages(env: Env, sourceId: string): Promise<SourcePageRow[]> {
-  const rows = await env.DB.prepare(
-    `SELECT id, source_id, url, label, transaction_type, category_filter, enabled, follow_detail, detail_limit
-     FROM source_pages WHERE source_id = ? AND enabled = 1 ORDER BY id`,
-  ).bind(sourceId).all<Record<string, unknown>>();
-  return rows.results.map((row) => ({
-    id: String(row.id),
-    source_id: String(row.source_id),
-    url: String(row.url),
-    label: row.label == null ? null : String(row.label),
-    transaction_type: String(row.transaction_type) as "buy" | "rent",
-    category_filter: row.category_filter == null ? null : String(row.category_filter),
-    enabled: Number(row.enabled),
-    follow_detail: Number(row.follow_detail ?? 0),
-    detail_limit: Number(row.detail_limit ?? 0),
-  }));
-}
-
 /**
  * Reads the configured listing pages once and stores what they publish.
  *
@@ -116,7 +60,7 @@ export async function listSourcePages(env: Env, sourceId: string): Promise<Sourc
  */
 export async function runCollection(
   env: Env,
-  options: { sourceId?: string; fetchImpl?: FetchLike; maxPages?: number } = {},
+  options: { sourceId?: string; fetchImpl?: FetchLike; maxPages?: number; expiresAt?: string } = {},
 ): Promise<CollectRunResult> {
   const sourceId = options.sourceId ?? SOURCE_COLLECTOR;
   const permission = await checkSourcePermission(env, sourceId);
@@ -216,7 +160,7 @@ export async function runCollection(
       const input = toListingInput(item, page);
       const parsed = listingSchema.safeParse(input);
       if (!parsed.success) { result.skipped++; skipped++; continue; }
-      const stored = await upsertListing(env, parsed.data, sourceId);
+      const stored = await upsertListing(env, parsed.data, sourceId, options.expiresAt ?? undefined, page.id);
       if (stored.created) { result.inserted++; inserted++; } else { result.updated++; updated++; }
     }
 

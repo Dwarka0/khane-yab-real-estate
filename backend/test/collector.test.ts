@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractCollectedItems, extractFlightItems, extractJsonLdProducts, parseAmount } from "../src/collector";
-import { matchesCategoryFilter, runCollection, toListingInput, type SourcePageRow } from "../src/collectorRun";
+import { matchesCategoryFilter, runCollection } from "../src/collectorRun";
+import { toListingInput, type SourcePageRow } from "../src/liveSearch";
 import { FakeDatabase, fakeEnv } from "./fakeD1";
 
 /** A page shaped like the Divar category page: a JSON-LD array of products. */
@@ -88,7 +89,7 @@ describe("category page extraction", () => {
   });
 
   it("turns a collected item into a listing input", () => {
-    const page: SourcePageRow = { id: "p", source_id: "s", url: "https://www.sheypoor.com/s/tehran/x", label: null, transaction_type: "buy", category_filter: null, enabled: 1, follow_detail: 0, detail_limit: 0 };
+    const page: SourcePageRow = { id: "p", source_id: "s", url: "https://www.sheypoor.com/s/tehran/x", label: null, transaction_type: "buy", category_filter: null, enabled: 1, follow_detail: 0, detail_limit: 0, city: "تهران", property_type: "apartment" };
     const input = toListingInput({
       sourceListingId: "1", title: "آگهی", url: "https://www.sheypoor.com/v/a-1.html", price: 100, features: ["elevator"],
       city: "تهران", neighborhood: "ونک", propertyType: "apartment", transactionType: "buy",

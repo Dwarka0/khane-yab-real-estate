@@ -14,7 +14,8 @@ RATE_LIMIT_PER_MINUTE = "60"
 MAX_LISTING_AGE_DAYS = "90"
 ALLOWED_ORIGINS = "https://khane-yab-web.pages.dev,https://khane-yab-mobile.pages.dev,https://khane-yab-web.m-abner-9907.workers.dev,https://khane-yab-mobile.m-abner-9907.workers.dev"
 
-# The collector refreshes the configured listing pages six times a day.
-# Each run makes one request per configured page and never crawls.
+# The platform no longer harvests in the background: a search reads the
+# source pages when the seeker searches. This job only removes the cache
+# entries that expired, so the server never accumulates listing data.
 [triggers]
-crons = ["23 */6 * * *"]
+crons = ["17 * * * *"]

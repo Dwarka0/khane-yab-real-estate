@@ -130,7 +130,7 @@ Each use case follows the Pressman format: actors, trigger, preconditions, a mai
 
 **Acceptance criteria:** TC-ING-06, TC-SEC-04.
 
-## UC-7 — Collect listings from the sources' own pages
+## UC-7 — Search the sources and answer from a short lived cache
 
 - **Primary actor:** the platform (scheduled job) · **Supporting actor:** the source's public category page · **Stakeholders:** seeker, operator, source owner
 - **Trigger:** the cron schedule fires (every six hours) or an operator calls `POST /api/collect`.

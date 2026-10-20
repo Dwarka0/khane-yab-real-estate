@@ -9,7 +9,9 @@ import { linkImportSchema, preferencesSchema, searchSchema } from "./validation"
 import { hourlyOperationLimit, rateLimit } from "./rateLimit";
 import { demoListings, importListings, IngestionPermissionError } from "./ingestion";
 import { importListingFromUrl } from "./linkImport";
+import { toPublicListing, type PublicListing } from "./publicListing";
 import { runCollection } from "./collectorRun";
+import { searchLive } from "./liveSearch";
 import { isEligibleListing, REASON_LABELS, scoreListing } from "./scoring";
 import { freshnessScore, isFresh } from "./listings";
 import { checkSourcePermission, loadSource } from "./sources";
@@ -27,6 +29,7 @@ app.use("/api/*", rateLimit);
 app.use("/api/preferences/*", bodyLimit({ maxSize: 16 * 1024 }));
 app.use("/api/ingest/manual", bodyLimit({ maxSize: 1_048_576 }));
 app.use("/api/listings/import-link", hourlyOperationLimit);
+app.use("/api/search/live", hourlyOperationLimit);
 app.use("/api/listings/import-link", bodyLimit({ maxSize: 8 * 1024 }));
 
 // Every response carries a request id so an operator can correlate a user
@@ -51,36 +54,6 @@ app.onError((error, c) => {
   console.error("api_error", { requestId, path: safePath, errorType: error.name });
   return fail(c, { code: "INTERNAL_ERROR", message: "درخواست با خطا مواجه شد", requestId }, 500);
 });
-
-type PublicListing = {
-  id: string; source: string; sourceUrl?: string; title: string; description: string; city: string;
-  neighborhood?: string; propertyType: string; transactionType: "buy" | "rent";
-  price: number; salePrice?: number; monthlyRent?: number; deposit?: number;
-  areaM2?: number; bedrooms?: number; bathrooms?: number;
-  features: string[]; publishedAt?: string; last_seen_at: string; freshnessScore?: number; stale: boolean;
-};
-
-function toPublicListing(row: Record<string, unknown>, maxAgeDays: number): PublicListing {
-  const lastSeen = String(row.last_seen_at);
-  const stale = !isFresh(lastSeen, maxAgeDays);
-  return {
-    id: String(row.id), source: String(row.source), sourceUrl: row.source_url == null ? undefined : String(row.source_url),
-    title: String(row.title), description: String(row.description), city: String(row.city),
-    neighborhood: row.neighborhood == null ? undefined : String(row.neighborhood), propertyType: String(row.property_type),
-    transactionType: String(row.transaction_type) as "buy" | "rent", price: Number(row.price),
-    salePrice: row.sale_price == null ? undefined : Number(row.sale_price),
-    monthlyRent: row.monthly_rent == null ? undefined : Number(row.monthly_rent),
-    deposit: row.deposit == null ? undefined : Number(row.deposit),
-    areaM2: row.area_m2 == null ? undefined : Number(row.area_m2),
-    bedrooms: row.bedrooms == null ? undefined : Number(row.bedrooms),
-    bathrooms: row.bathrooms == null ? undefined : Number(row.bathrooms),
-    features: JSON.parse(String(row.features)) as string[],
-    publishedAt: row.published_at == null ? undefined : String(row.published_at),
-    last_seen_at: lastSeen,
-    freshnessScore: freshnessScore(lastSeen),
-    stale,
-  };
-}
 
 function isAdmin(c: Context<{ Bindings: Env; Variables: { requestId: string } }>): boolean {
   const token = c.env.ADMIN_INGEST_TOKEN;
@@ -107,6 +80,42 @@ app.get("/api/sources", async c => {
   });
 });
 
+/**
+ * Searches the sources for the criteria of the seeker and returns the
+ * matching listings.
+ *
+ * The server reads the source pages at this moment and keeps them only in a
+ * short lived cache, so a repeated search does not ask the source again. What
+ * the seeker learns is kept on the seeker's device.
+ */
+app.post("/api/search/live", async c => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = preferencesSchema.safeParse(body);
+  if (!parsed.success) return fail(c, { code: "VALIDATION_ERROR", message: "اطلاعات جست‌وجو معتبر نیست", details: parsed.error.flatten() }, 400);
+  const p = parsed.data;
+  const criteria = {
+    transactionType: p.transactionType,
+    city: p.city,
+    propertyTypes: p.propertyTypes,
+    neighborhoods: p.neighborhoods,
+    budgetMin: p.budgetMin,
+    budgetMax: p.budgetMax,
+    minBedrooms: p.minBedrooms,
+    minAreaM2: p.minAreaM2,
+    mustHave: p.mustHave,
+    avoid: p.avoid,
+  };
+  try {
+    const result = await searchLive(c.env, criteria, {
+      maxPages: Math.max(1, Math.min(12, Number(c.req.query("maxPages")) || 6)),
+      limit: Math.max(1, Math.min(100, Number(c.req.query("limit")) || 50)),
+    });
+    return c.json(result);
+  } catch (error) {
+    return fail(c, { code: "SEARCH_FAILED", message: error instanceof Error ? error.message : "جست‌وجو انجام نشد" }, 502);
+  }
+});
+
 app.put("/api/preferences/:id", async c => {
   const id = c.req.param("id").trim();
   // Preference IDs are short-lived, anonymous bearer capabilities generated with
@@ -130,7 +139,7 @@ app.get("/api/listings", async c => {
   const parsed = searchSchema.safeParse(Object.fromEntries(new URL(c.req.url).searchParams));
   if (!parsed.success) return fail(c, {code:"VALIDATION_ERROR",message:"فیلترهای جست‌وجو معتبر نیست",details:parsed.error.flatten()}, 400);
   const p = parsed.data;
-  const where = ["status='active'"], values: (string|number)[] = [];
+  const where = ["status='active'", "(expires_at IS NULL OR expires_at > ?)"], values: (string|number)[] = [new Date().toISOString()];
   if (p.city) { where.push("city = ? COLLATE NOCASE"); values.push(p.city); }
   if (p.transactionType) { where.push("transaction_type = ?"); values.push(p.transactionType); }
   if (p.propertyType) { where.push("property_type = ? COLLATE NOCASE"); values.push(p.propertyType); }
@@ -162,7 +171,7 @@ app.post("/api/recommendations/:preferenceId", async c => {
   const row = await c.env.DB.prepare("SELECT * FROM user_preferences WHERE id=?").bind(c.req.param("preferenceId")).first<Record<string,unknown>>();
   if (!row) return fail(c, {code:"PREFERENCES_NOT_FOUND",message:"ابتدا ترجیحات را ثبت کنید"}, 404);
   const prefs = { budgetMin: row.budget_min == null ? undefined : Number(row.budget_min), budgetMax: row.budget_max == null ? undefined : Number(row.budget_max), propertyTypes:JSON.parse(String(row.property_types)) as string[], transactionType:row.transaction_type as "buy"|"rent", city:row.city == null ? undefined : String(row.city), neighborhoods:JSON.parse(String(row.neighborhoods)) as string[], minBedrooms:row.min_bedrooms == null ? undefined : Number(row.min_bedrooms), minAreaM2:row.min_area_m2 == null ? undefined : Number(row.min_area_m2), maxCommuteMinutes:row.max_commute_minutes == null ? undefined : Number(row.max_commute_minutes), mustHave:JSON.parse(String(row.must_have)) as string[], avoid:JSON.parse(String(row.avoid)) as string[] };
-  const result = await c.env.DB.prepare("SELECT * FROM listings WHERE status='active' AND transaction_type=? ORDER BY last_seen_at DESC LIMIT 500").bind(prefs.transactionType).all<Record<string,unknown>>();
+  const result = await c.env.DB.prepare("SELECT * FROM listings WHERE status='active' AND transaction_type=? AND (expires_at IS NULL OR expires_at > ?) ORDER BY last_seen_at DESC LIMIT 500").bind(prefs.transactionType, new Date().toISOString()).all<Record<string,unknown>>();
   const maxAge = Math.max(1, Number(c.env.MAX_LISTING_AGE_DAYS) || 90);
   const eligible = result.results.map(r => ({ row: r, listing: toPublicListing(r, maxAge) }))
     .filter(({ listing }) => isEligibleListing(listing,prefs))
@@ -343,14 +352,19 @@ app.get("/api/collect/pages", async c => {
   });
 });
 
-/** Removes expired anonymous preferences and stale operational rows (FR-14). */app.post("/api/maintenance/cleanup", async c => {
+/** Removes expired anonymous preferences, expired cache rows, and stale operational rows (FR-14). */
+app.post("/api/maintenance/cleanup", async c => {
   if (!isAdmin(c)) return fail(c, {code:"UNAUTHORIZED",message:"اجازه دسترسی ندارید"}, 401);
   const now = new Date().toISOString();
   const preferences = await c.env.DB.prepare("DELETE FROM user_preferences WHERE expires_at IS NOT NULL AND expires_at < ?").bind(now).run();
+  const listings = await c.env.DB.prepare("DELETE FROM listings WHERE expires_at IS NOT NULL AND expires_at < ?").bind(now).run();
+  const pages = await c.env.DB.prepare("DELETE FROM page_cache WHERE expires_at < ?").bind(now).run();
   const observations = await c.env.DB.prepare("DELETE FROM listing_observations WHERE observed_at < ?").bind(new Date(Date.now() - 180 * 86_400_000).toISOString()).run();
   const buckets = await c.env.DB.prepare("DELETE FROM rate_limit_buckets WHERE window_start < ?").bind(Math.floor(Date.now() / 60_000) - 60).run();
   return c.json({
     deletedPreferences: preferences.meta.changes ?? 0,
+    deletedCachedListings: listings.meta.changes ?? 0,
+    deletedPageCache: pages.meta.changes ?? 0,
     deletedObservations: observations.meta.changes ?? 0,
     deletedRateLimitBuckets: buckets.meta.changes ?? 0,
   });
@@ -368,18 +382,29 @@ app.get("/api/sources/:id/permission", async c => {
 });
 
 /**
- * The scheduled handler refreshes the configured listing pages on a low
- * frequency. It never crawls: it reads the pages listed in `source_pages`,
- * one request per page, and stores only the fields needed for matching.
+ * The scheduled handler keeps the server free of stale listing data.
+ *
+ * The platform no longer harvests in the background: a search reads the
+ * source pages when the seeker searches. What the server keeps is a short
+ * lived cache, and this job removes the entries that expired.
  */
 export default {
   fetch: app.fetch,
   scheduled: async (_event: ScheduledController, env: Env) => {
     try {
-      const result = await runCollection(env);
-      console.log("collector_run", { runId: result.runId, inserted: result.inserted, updated: result.updated, pages: result.pages.length });
+      const now = new Date().toISOString();
+      const listings = await env.DB.prepare("DELETE FROM listings WHERE expires_at IS NOT NULL AND expires_at < ?").bind(now).run();
+      const pages = await env.DB.prepare("DELETE FROM page_cache WHERE expires_at < ?").bind(now).run();
+      const observations = await env.DB.prepare("DELETE FROM listing_observations WHERE observed_at < ?").bind(new Date(Date.now() - 180 * 86_400_000).toISOString()).run();
+      const buckets = await env.DB.prepare("DELETE FROM rate_limit_buckets WHERE window_start < ?").bind(Math.floor(Date.now() / 60_000) - 60).run();
+      console.log("cache_cleanup", {
+        listings: listings.meta.changes ?? 0,
+        pages: pages.meta.changes ?? 0,
+        observations: observations.meta.changes ?? 0,
+        buckets: buckets.meta.changes ?? 0,
+      });
     } catch (error) {
-      console.error("collector_error", { errorType: error instanceof Error ? error.name : "unknown" });
+      console.error("cache_cleanup_error", { errorType: error instanceof Error ? error.name : "unknown" });
     }
   },
 };

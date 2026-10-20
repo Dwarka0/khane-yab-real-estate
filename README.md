@@ -21,16 +21,17 @@ The web app and API have been deployed and smoke-tested. Demo listings are seede
 
 ### How real listings enter the platform
 
-1. **Automatic collection (default).** The worker reads the public category pages that are declared in `source_pages` — for example the Sheypoor pages for Tehran and Karaj, sale and rent — six times a day, one request per page. Each page publishes its listings as structured data (a `schema.org` product list or a server-rendered item list), so the worker extracts the title, price, monthly rent, deposit, area, rooms, location, and amenities without crawling. Every listing keeps its source page link, and a new observation is recorded each time.
-2. **User-submitted link.** The user pastes one public listing URL from Divar or Sheypoor. The worker reads that single page, extracts the same structured data, stores only the fields needed for matching, and links back to the original listing.
-3. **Operator import.** `POST /api/ingest/manual` accepts up to 100 authorized records with a bearer token, validates every field, reports row-level diagnostics, and commits transactionally.
-4. **Demo fixtures.** Synthetic records for a fresh deployment.
+**The search happens when the seeker searches.** `POST /api/search/live` takes the criteria, reads the matching pages of the sources (Divar first), and answers with the listings that fit. The pages are declared in `source_pages` and can be changed without a deployment; the sources' `robots.txt` is followed, the request rate is low, no account is used, and no access control is bypassed.
 
-Every source must be registered in the `sources` table with an approved permission record, and the gate fails closed: a source that is missing, disabled, or unapproved refuses every ingestion path. The collector follows the sources' `robots.txt`, keeps a low request rate, never uses an account, and never bypasses an access control. The pages it may read are listed explicitly and can be changed without a deployment.
+**The server keeps nothing.** The listings a search reads live in a cache with a two hour lifetime, and an hourly job removes what expired. Only the synthetic demo fixtures stay. The 866 permanently stored rows of earlier versions were removed from the database.
 
-### The profile stays on the device
+**The device keeps everything.** The web and mobile clients store the listings they fetched, the favourites, and the profile in the device's own storage, and they learn from what the seeker saves: the city, the budget, the area, and the room count that appear most often become the suggestions for the next search. The criteria travel with a search only as the short lived anonymous capability the API already accepts, and the server stores nothing that identifies the device or the person.
 
-Both clients keep a **device-local profile**: the search criteria and the saved listings are stored in the device's own storage, no account and no login is required, and the user can erase the profile from the interface. The criteria are sent with a search only as the short-lived anonymous capability the API already accepts, and the server stores nothing that identifies the device or the person.
+Two more paths exist for the operator: a user-submitted listing link (`POST /api/listings/import-link`) and a validated bulk import (`POST /api/ingest/manual`). Every source must be registered in the `sources` table with an approved permission record, and the gate fails closed.
+
+### The memory stays on the device
+
+Both clients keep a **device-local memory**: the search criteria, the listings that were fetched, the favourites, and what the app has learned about the seeker. No account and no login is required, and the user can erase the memory from the interface. A search asks the server for the current listings, the answer is stored on the device, and the device can answer from its own copy the next time. The server keeps a two hour cache of what it read, never a copy of the seeker's memory, and nothing that identifies the device or the person.
 
 Listings from Divar and Sheypoor must only be imported through an official API, an explicitly authorized integration, or user-provided data that the user is entitled to use. The project includes demo data and manual import as a safe starting path; it does not bypass access controls or claim that a listing is still available. Each result shows its source and freshness/verification status.
 
