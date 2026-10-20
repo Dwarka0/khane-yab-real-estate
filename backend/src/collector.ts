@@ -10,6 +10,8 @@
  * The extractor never guesses: a field it cannot read stays unknown.
  */
 
+import { parseNumber, parseRoomsFromText } from "./pageExtract";
+
 export interface CollectedItem {
   sourceListingId: string;
   title: string;
@@ -24,6 +26,7 @@ export interface CollectedItem {
   neighborhood?: string;
   features: string[];
   category?: string;
+  description?: string;
   imageUrl?: string;
   transactionType: "buy" | "rent";
 }
@@ -112,8 +115,16 @@ function normalizeType(value: string | undefined): string | undefined {
 }
 
 function idFromUrl(url: string): string | undefined {
-  const match = /(\d{6,})/.exec(url);
-  return match?.[1];
+  const match = /(\d{4,})/.exec(url);
+  if (match) return match[1];
+  try {
+    const segments = new URL(url).pathname.split("/").filter(Boolean);
+    const last = segments[segments.length - 1]?.replace(/\.html$/, "");
+    if (last && /^[A-Za-z0-9_-]{6,20}$/.test(last)) return last;
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function splitLocation(location: string | undefined): { city?: string; neighborhood?: string } {
@@ -212,9 +223,116 @@ export function extractFlightItems(html: string): CollectedItem[] {
   return items;
 }
 
+const ROOM_WORDS: Record<string, number> = {
+  "یک": 1, "دو": 2, "سه": 3, "چهار": 4, "پنج": 5,
+  "شش": 6, "هفت": 7, "هشت": 8, "نه": 9, "ده": 10,
+};
+
+/** Reads a room count that a source states in words. */
+export function parseRoomWord(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const word = ROOM_WORDS[trimmed];
+  if (word !== undefined) return word;
+  const digits = /(\d+)\s*خواب/.exec(trimmed);
+  return digits ? Number(digits[1]) : undefined;
+}
+
+/** Reads the preloaded application state that Divar embeds in the page. */
+export function extractPreloadedState(html: string): Record<string, unknown> | null {
+  const marker = html.indexOf("window.__PRELOADED_STATE__");
+  if (marker < 0) return null;
+  const equals = html.indexOf("=", marker);
+  if (equals < 0) return null;
+  const start = equals + 1;
+  let depth = 0, inString = false, escaped = false, end = -1;
+  for (let index = start; index < html.length; index++) {
+    const char = html[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === "{" || char === "[") depth++;
+    else if (char === "}" || char === "]") {
+      depth--;
+      if (depth === 0) { end = index + 1; break; }
+    }
+  }
+  if (end < 0) return null;
+  try {
+    return JSON.parse(html.slice(start, end)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads the Divar search result list. The page embeds the results as linked
+ * data in its preloaded state, with the title, the link, the area, the room
+ * count, the coordinates, and the category of every listing. The price is
+ * not part of that data and is read from the listing page on request.
+ */
+export function extractDivarStateItems(html: string): CollectedItem[] {
+  const state = extractPreloadedState(html);
+  if (!state) return [];
+  const navigation = (state.nb ?? {}) as Record<string, unknown>;
+  const seo = (navigation.seoDetails ?? {}) as Record<string, unknown>;
+  const linked = seo.linkedData;
+  if (!Array.isArray(linked)) return [];
+
+  const items: CollectedItem[] = [];
+  for (const node of linked) {
+    if (!node || typeof node !== "object") continue;
+    const record = node as Record<string, unknown>;
+    const url = text(record.url);
+    const info = (record.web_info ?? {}) as Record<string, unknown>;
+    const title = text(record.name) ?? text(info.title);
+    if (!url || !title) continue;
+    const floorSize = asRecord(record.floorSize);
+    const area = floorSize ? numericField(floorSize.value) : numericField(record.floorSize);
+    const geo = asRecord(record.geo);
+    const category = text(record.accommodationCategory) ?? text(info.category_slug_persian);
+    const rooms = parseRoomWord(record.numberOfRooms) ?? parseRoomsFromText(title);
+    items.push({
+      sourceListingId: idFromUrl(url) ?? url,
+      title,
+      url,
+      areaM2: area !== undefined && area > 0 ? area : undefined,
+      bedrooms: rooms,
+      city: text(info.city_persian),
+      neighborhood: text(info.district_persian),
+      propertyType: normalizeType(category),
+      category,
+      features: [],
+      imageUrl: text(record.image),
+      transactionType: "buy",
+    });
+  }
+  return items;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function numericField(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") return parseNumber(value);
+  return undefined;
+}
+
 /** Reads every listing a category page exposes, from either supported shape. */
 export function extractCollectedItems(html: string): CollectedItem[] {
-  const items = [...extractJsonLdProducts(html), ...extractFlightItems(html)];
+  const items = [
+    ...extractDivarStateItems(html),
+    ...extractJsonLdProducts(html),
+    ...extractFlightItems(html),
+  ];
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.sourceListingId)) return false;

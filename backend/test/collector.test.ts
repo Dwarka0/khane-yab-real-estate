@@ -88,7 +88,7 @@ describe("category page extraction", () => {
   });
 
   it("turns a collected item into a listing input", () => {
-    const page: SourcePageRow = { id: "p", source_id: "s", url: "https://www.sheypoor.com/s/tehran/x", label: null, transaction_type: "buy", category_filter: null, enabled: 1 };
+    const page: SourcePageRow = { id: "p", source_id: "s", url: "https://www.sheypoor.com/s/tehran/x", label: null, transaction_type: "buy", category_filter: null, enabled: 1, follow_detail: 0, detail_limit: 0 };
     const input = toListingInput({
       sourceListingId: "1", title: "آگهی", url: "https://www.sheypoor.com/v/a-1.html", price: 100, features: ["elevator"],
       city: "تهران", neighborhood: "ونک", propertyType: "apartment", transactionType: "buy",

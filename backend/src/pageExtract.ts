@@ -294,11 +294,59 @@ export function extractSourceListingId(url: string): string | undefined {
     const segments = parsed.pathname.split("/").filter(Boolean);
     const last = segments[segments.length - 1];
     if (!last) return undefined;
-    const digits = /(\d{4,})/.exec(last) ?? /(\d{4,})/.exec(parsed.search);
-    return digits?.[1];
+    const digits = /(\d{4,})/.exec(last);
+    if (digits) return digits[1];
+    // Divar style identifiers are short alphanumeric tokens such as `gaWn2V4d`.
+    const token = last.replace(/\.html$/, "");
+    if (/^[A-Za-z0-9_-]{6,20}$/.test(token)) return token;
+    const digitsInPath = /(\d{4,})/.exec(parsed.pathname);
+    return digitsInPath?.[1];
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Reads the Divar record shape: a JSON-LD object that carries `web_info`
+ * (title, city, district, category) together with a description, an image,
+ * and an `offers` block. Divar states the price in the page text for many
+ * listings, so the text is used when the structured price is missing.
+ */
+export function extractDivarRecord(html: string, url: string): ExtractedPage | null {
+  let record: Record<string, unknown> | null = null;
+  for (const block of jsonLdBlocks(html)) {
+    const candidates = Array.isArray(block) ? block : [block];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const node = candidate as Record<string, unknown>;
+      if (node.web_info && typeof node.web_info === "object") { record = node; break; }
+    }
+    if (record) break;
+  }
+  if (!record) return null;
+
+  const info = (record.web_info ?? {}) as Record<string, unknown>;
+  const offers = (record.offers ?? {}) as Record<string, unknown>;
+  const title = typeof info.title === "string" ? info.title : undefined;
+  if (!title) return null;
+
+  const text = `${stripTags(html)} ${typeof record.description === "string" ? record.description : ""}`;
+  const structuredPrice = typeof offers.price === "string" ? Number(offers.price.replace(/[^\d.]/g, "")) : undefined;
+  const price = structuredPrice && structuredPrice > 0 ? structuredPrice : parsePriceFromText(text);
+
+  return {
+    title,
+    description: typeof record.description === "string" ? record.description.slice(0, 2000) : undefined,
+    price: price && price > 0 ? price : undefined,
+    areaM2: parseAreaFromText(text),
+    bedrooms: parseRoomsFromText(text),
+    city: typeof info.city_persian === "string" ? info.city_persian : undefined,
+    neighborhood: typeof info.district_persian === "string" ? info.district_persian : undefined,
+    features: [],
+    imageUrl: typeof record.image === "string" ? record.image : undefined,
+    sourceListingId: extractSourceListingId(url),
+    publishedAt: undefined,
+  };
 }
 
 /**
@@ -306,6 +354,14 @@ export function extractSourceListingId(url: string): string | undefined {
  * Returns null only when no usable title could be established.
  */
 export function extractListingFromHtml(html: string, url: string): ExtractedPage | null {
+  const divar = extractDivarRecord(html, url);
+  if (divar) {
+    const text = `${stripTags(html)} ${divar.description ?? ""}`;
+    const area = divar.areaM2 ?? parseAreaFromText(text);
+    const rooms = divar.bedrooms ?? parseRoomsFromText(text);
+    return { ...divar, areaM2: area, bedrooms: rooms };
+  }
+
   const out: ExtractedPage = { features: [] };
 
   for (const block of jsonLdBlocks(html)) {
