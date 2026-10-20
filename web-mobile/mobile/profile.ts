@@ -182,3 +182,31 @@ export async function rememberListings(profile: DeviceProfile, listings: CachedL
   await saveProfile(next);
   return next;
 }
+
+/** The criteria a search is made with. */
+export type SearchCriteria = {
+  transactionType: 'buy' | 'rent';
+  city?: string;
+  propertyTypes?: string[];
+  budgetMin?: number;
+  budgetMax?: number;
+  minBedrooms?: number;
+  minAreaM2?: number;
+  neighborhoods?: string[];
+};
+
+/** The listings the phone already has that fit the criteria. */
+export function matchCached(profile: DeviceProfile, criteria: SearchCriteria): CachedListing[] {
+  return profile.cache.filter((item) => {
+    if (item.transactionType !== criteria.transactionType) return false;
+    if (criteria.city && item.city && item.city !== criteria.city) return false;
+    if (criteria.neighborhoods?.length && item.neighborhood && !criteria.neighborhoods.some((name) => item.neighborhood!.includes(name))) return false;
+    if (criteria.propertyTypes?.length && item.propertyType && !criteria.propertyTypes.includes(item.propertyType)) return false;
+    // An unknown price is not a budget mismatch.
+    if (item.price > 0 && criteria.budgetMax !== undefined && item.price > criteria.budgetMax) return false;
+    if (item.price > 0 && criteria.budgetMin !== undefined && item.price < criteria.budgetMin) return false;
+    if (criteria.minAreaM2 !== undefined && item.areaM2 !== undefined && item.areaM2 < criteria.minAreaM2) return false;
+    if (criteria.minBedrooms !== undefined && item.bedrooms !== undefined && item.bedrooms < criteria.minBedrooms) return false;
+    return true;
+  });
+}

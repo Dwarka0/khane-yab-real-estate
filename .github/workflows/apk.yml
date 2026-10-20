@@ -1,0 +1,71 @@
+name: Android package
+
+# Builds the installable Android file of the app.
+#
+# The GitHub runner already carries the Android SDK, so the package is built
+# here instead of on a developer machine. The result is attached to the release
+# of the tag, and can be downloaded and installed directly on a phone.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-mobile/mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-mobile/mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: Draw the icons and the splash
+        run: |
+          npm run assets:generate
+          npm run assets:web
+      - name: Create the native project
+        run: npx expo prebuild --platform android
+      - name: Install the platform pieces the project asks for
+        run: |
+          ndk=$(grep -oP 'ndkVersion\s*=\s*"\K[^"]+' android/build.gradle | head -1)
+          sdk=$(grep -oP 'compileSdkVersion\s*=\s*\K[0-9]+' android/build.gradle | head -1)
+          ndk=${ndk:-27.1.12297006}
+          sdk=${sdk:-36}
+          echo "the project wants the SDK $sdk and the NDK $ndk"
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-$sdk" "ndk;$ndk" "cmake;3.22.1"
+      - name: Build the installable package
+        env:
+          EXPO_PUBLIC_API_BASE_URL: https://real-estate-platform-api.m-abner-9907.workers.dev
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+          cp "$(ls app/build/outputs/apk/release/*.apk | head -1)" ../khane-yab.apk
+          ls -l ../khane-yab.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: khane-yab-apk
+          path: web-mobile/mobile/khane-yab.apk
+      - name: Attach the package to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          gh release view "$tag" > /dev/null 2>&1 || gh release create "$tag" --title "خانه‌یاب $tag" --generate-notes
+          gh release upload "$tag" khane-yab.apk --clobber

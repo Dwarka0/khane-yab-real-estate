@@ -11,7 +11,7 @@ import { demoListings, importListings, IngestionPermissionError } from "./ingest
 import { importListingFromUrl } from "./linkImport";
 import { toPublicListing, type PublicListing } from "./publicListing";
 import { runCollection } from "./collectorRun";
-import { searchLive } from "./liveSearch";
+import { enrichPagesInBackground, searchLive } from "./liveSearch";
 import { isEligibleListing, REASON_LABELS, scoreListing } from "./scoring";
 import { freshnessScore, isFresh } from "./listings";
 import { checkSourcePermission, loadSource } from "./sources";
@@ -109,7 +109,19 @@ app.post("/api/search/live", async c => {
     const result = await searchLive(c.env, criteria, {
       maxPages: Math.max(1, Math.min(12, Number(c.req.query("maxPages")) || 6)),
       limit: Math.max(1, Math.min(100, Number(c.req.query("limit")) || 50)),
+      inlineDetailLimit: Math.max(0, Math.min(12, Number(c.req.query("details") ?? "3"))),
     });
+    // The remaining listing pages are read after the answer was sent, so the
+    // prices arrive a little later without making the seeker wait.
+    const pageIds = result.pages.filter((page) => page.status === "ok" && page.items > 0).map((page) => page.pageId);
+    if (pageIds.length > 0) {
+      const background = () => enrichPagesInBackground(c.env, pageIds, {});
+      try {
+        c.executionCtx.waitUntil(background());
+      } catch {
+        void background();
+      }
+    }
     return c.json(result);
   } catch (error) {
     return fail(c, { code: "SEARCH_FAILED", message: error instanceof Error ? error.message : "جست‌وجو انجام نشد" }, 502);
@@ -370,6 +382,20 @@ app.post("/api/maintenance/cleanup", async c => {
   });
 });
 
+/** Diagnostic: reads one address from the edge and reports what came back. */
+app.get("/api/debug/fetch", async c => {
+  if (!isAdmin(c)) return fail(c, { code: "UNAUTHORIZED", message: "اجازه دسترسی ندارید" }, 401);
+  const target = c.req.query("url");
+  if (!target) return fail(c, { code: "VALIDATION_ERROR", message: "نشانی لازم است" }, 400);
+  try {
+    const response = await fetch(target, { headers: { "User-Agent": "KhaneYabBot/1.0 (+https://khane-yab-web.pages.dev)", Accept: "text/html,application/json", "Accept-Language": "fa-IR,fa;q=0.9" } });
+    const body = await response.text();
+    return c.json({ status: response.status, bytes: body.length, snippet: body.slice(0, 400) });
+  } catch (error) {
+    return c.json({ status: 0, error: error instanceof Error ? error.message : "unknown" });
+  }
+});
+
 /** Reports the authorization state of a source without exposing credentials. */
 app.get("/api/sources/:id/permission", async c => {
   const result = await checkSourcePermission(c.env, c.req.param("id"));
@@ -403,6 +429,16 @@ export default {
         observations: observations.meta.changes ?? 0,
         buckets: buckets.meta.changes ?? 0,
       });
+
+      // The listings that are still cached and do not have a price yet are
+      // completed, slowly, so the next search of every seeker shows more
+      // prices.
+      const pending = await env.DB.prepare(
+        "SELECT DISTINCT page_id FROM listings WHERE expires_at > ? AND page_id IS NOT NULL AND (price <= 0 OR price IS NULL) LIMIT 6",
+      ).bind(now).all<{ page_id: string }>();
+      if (pending.results.length > 0) {
+        await enrichPagesInBackground(env, pending.results.map((row) => String(row.page_id)), { limitPerPage: 4 });
+      }
     } catch (error) {
       console.error("cache_cleanup_error", { errorType: error instanceof Error ? error.name : "unknown" });
     }

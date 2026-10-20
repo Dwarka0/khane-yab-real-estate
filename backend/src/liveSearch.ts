@@ -3,6 +3,7 @@ import { fetchSourcePage, type FetchLike } from "./linkImport";
 import { upsertListing } from "./listingStore";
 import { listingSchema } from "./validation";
 import { checkSourcePermission, hostAllowlist } from "./sources";
+import { enrichWithDetailPages } from "./detailEnrich";
 import { isEligibleListing, scoreListing, REASON_LABELS } from "./scoring";
 import { toPublicListing, toPublicListingFromInput, type PublicListing } from "./publicListing";
 import type { Env, ListingInput, Preferences } from "./types";
@@ -42,6 +43,11 @@ export interface LivePageReport {
   status: "ok" | "empty" | "error";
   items: number;
   cached: boolean;
+  details: number;
+  detailsEnriched: number;
+  detailsWithPrice?: number;
+  detailSample?: string;
+  detailError?: string;
   message?: string;
 }
 
@@ -147,7 +153,9 @@ async function readPage(
   allowlist: string[],
   fetchImpl: FetchLike,
   expiresAt: string,
-): Promise<{ items: CollectedItem[]; rows?: Record<string, unknown>[]; cached: boolean; status: "ok" | "empty" | "error"; message?: string }> {
+  rank?: (item: CollectedItem) => number,
+  inlineDetailLimit?: number,
+): Promise<{ items: CollectedItem[]; rows?: Record<string, unknown>[]; cached: boolean; status: "ok" | "empty" | "error"; enrichment?: { attempted: number; enriched: number; withPrice: number; sample?: string; error?: string }; message?: string }> {
   const cached = await env.DB.prepare("SELECT fetched_at, expires_at FROM page_cache WHERE page_id = ?").bind(page.id).first<{ fetched_at: string; expires_at: string }>();
   if (cached && cached.expires_at > new Date().toISOString()) {
     // The page was read recently: answer from the cache without asking the
@@ -170,6 +178,19 @@ async function readPage(
     return wanted.some((needle) => (category ?? "").includes(needle));
   });
 
+  let enrichment = { attempted: 0, enriched: 0, withPrice: 0 };
+  if (page.follow_detail && items.length > 0) {
+    // The price of a Divar listing is only on the listing page itself.
+    enrichment = await enrichWithDetailPages(env, items, {
+      pageId: page.id,
+      sourceHost: new URL(page.url).hostname.replace(/^www\./, ""),
+      allowlist,
+      fetchImpl,
+      limit: Math.max(0, Math.min(12, inlineDetailLimit ?? page.detail_limit)),
+      rank,
+    });
+  }
+
   for (const item of items) {
     const input = toListingInput(item, page);
     const parsed = listingSchema.safeParse(input);
@@ -181,7 +202,7 @@ async function readPage(
      ON CONFLICT(page_id) DO UPDATE SET fetched_at=CURRENT_TIMESTAMP, expires_at=excluded.expires_at, item_count=excluded.item_count`,
   ).bind(page.id, page.source_id, expiresAt, items.length).run();
 
-  return { items, rows: [], cached: false, status: items.length ? "ok" : "empty" };
+  return { items, rows: [], cached: false, status: items.length ? "ok" : "empty", enrichment };
 }
 
 /**
@@ -195,7 +216,7 @@ async function readPage(
 export async function searchLive(
   env: Env,
   criteria: LiveCriteria,
-  options: { sourceId?: string; fetchImpl?: FetchLike; maxPages?: number; cacheTtlMinutes?: number; limit?: number } = {},
+  options: { sourceId?: string; fetchImpl?: FetchLike; maxPages?: number; cacheTtlMinutes?: number; limit?: number; rank?: (item: CollectedItem) => number; inlineDetailLimit?: number } = {},
 ): Promise<LiveSearchResult> {
   const sourceId = options.sourceId ?? SOURCE_COLLECTOR;
   const permission = await checkSourcePermission(env, sourceId);
@@ -205,6 +226,18 @@ export async function searchLive(
   const ttlMinutes = Math.max(5, Math.min(1440, options.cacheTtlMinutes ?? DEFAULT_CACHE_TTL_MINUTES));
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
   const fetchedAt = new Date().toISOString();
+
+  // The listing pages that are read first are the ones that fit the search,
+  // so the seeker sees prices for the listings that matter to them.
+  const rank = (item: CollectedItem): number => {
+    let score = 0;
+    if (criteria.minAreaM2 !== undefined && item.areaM2 !== undefined) score += item.areaM2 >= criteria.minAreaM2 ? 3 : 0;
+    if (criteria.minBedrooms !== undefined && item.bedrooms !== undefined) score += item.bedrooms >= criteria.minBedrooms ? 3 : 0;
+    if (criteria.neighborhoods?.length && item.neighborhood && criteria.neighborhoods.some((name) => item.neighborhood!.includes(name))) score += 4;
+    if (criteria.city && item.city === criteria.city) score += 2;
+    if (criteria.propertyTypes?.length && item.propertyType && criteria.propertyTypes.includes(item.propertyType)) score += 2;
+    return score;
+  };
 
   const pages = await listSourcePages(env, sourceId);
   const resolved = resolvePages(pages, criteria);
@@ -223,9 +256,12 @@ export async function searchLive(
 
   for (const [index, page] of chosen.entries()) {
     if (index > 0) await sleep(4000);
-    const read = await readPage(env, page, allowlist, fetchImpl, expiresAt);
+    const read = await readPage(env, page, allowlist, fetchImpl, expiresAt, rank, options.inlineDetailLimit);
     reports.push({
-      pageId: page.id, label: page.label, url: page.url, status: read.status, items: read.items.length, cached: read.cached, message: read.message,
+      pageId: page.id, label: page.label, url: page.url, status: read.status, items: read.items.length, cached: read.cached,
+      details: read.enrichment?.attempted ?? 0, detailsEnriched: read.enrichment?.enriched ?? 0,
+      detailsWithPrice: read.enrichment?.withPrice, detailSample: read.enrichment?.sample,
+      detailError: read.enrichment?.error, message: read.message,
     });
     if (read.status === "error") continue;
     for (const item of read.items) {
@@ -273,7 +309,13 @@ export async function searchLive(
       const scored = scoreListing(listing, preferences);
       return { listing, score: scored.score, reasons: scored.reasons, reasonLabels: scored.reasonLabels };
     })
-    .sort((a, b) => b.score - a.score || (b.listing.freshnessScore ?? 0) - (a.listing.freshnessScore ?? 0) || a.listing.id.localeCompare(b.listing.id));
+    .sort((a, b) => {
+      const priceKnown = Number(b.listing.price > 0) - Number(a.listing.price > 0);
+      if (priceKnown !== 0) return priceKnown;
+      return b.score - a.score
+        || (b.listing.freshnessScore ?? 0) - (a.listing.freshnessScore ?? 0)
+        || a.listing.id.localeCompare(b.listing.id);
+    });
 
   const limit = Math.max(1, Math.min(100, options.limit ?? 50));
   return {
@@ -286,4 +328,69 @@ export async function searchLive(
     items: matches.slice(0, limit),
     total: matches.length,
   };
+}
+
+/**
+ * Continues reading the listing pages of a page after the answer was sent.
+ *
+ * The seeker gets the answer at once, and the prices of the remaining
+ * listings arrive in the background, slowly, so the source is never flooded
+ * and the next search shows more prices.
+ */
+export async function enrichPagesInBackground(
+  env: Env,
+  pageIds: string[],
+  options: { sourceId?: string; fetchImpl?: FetchLike; cacheTtlMinutes?: number; rank?: (item: CollectedItem) => number; limitPerPage?: number; delayMs?: number } = {},
+): Promise<void> {
+  const sourceId = options.sourceId ?? SOURCE_COLLECTOR;
+  const permission = await checkSourcePermission(env, sourceId);
+  if (!permission.allowed) return;
+  const allowlist = hostAllowlist(permission.source);
+  const fetchImpl = options.fetchImpl ?? ((input: string, init?: RequestInit) => fetch(input, init));
+  const ttlMinutes = Math.max(5, Math.min(1440, options.cacheTtlMinutes ?? DEFAULT_CACHE_TTL_MINUTES));
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+  const pages = await listSourcePages(env, sourceId);
+
+  for (const pageId of pageIds) {
+    const page = pages.find((candidate) => candidate.id === pageId);
+    if (!page || !page.follow_detail) continue;
+    const rows = await env.DB.prepare("SELECT * FROM listings WHERE page_id = ?").bind(pageId).all<Record<string, unknown>>();
+    const items: CollectedItem[] = rows.results.map((row) => ({
+      sourceListingId: String(row.source_listing_id ?? row.id),
+      title: String(row.title),
+      url: String(row.source_url ?? ""),
+      price: Number(row.price) > 0 ? Number(row.price) : undefined,
+      areaM2: row.area_m2 == null ? undefined : Number(row.area_m2),
+      bedrooms: row.bedrooms == null ? undefined : Number(row.bedrooms),
+      city: String(row.city),
+      neighborhood: row.neighborhood == null ? undefined : String(row.neighborhood),
+      propertyType: String(row.property_type),
+      category: String(row.property_type),
+      features: [],
+      transactionType: String(row.transaction_type) as "buy" | "rent",
+    }));
+    if (items.length === 0) continue;
+    const enrichment = await enrichWithDetailPages(env, items, {
+      pageId: page.id,
+      sourceHost: new URL(page.url).hostname.replace(/^www\./, ""),
+      allowlist,
+      fetchImpl,
+      limit: Math.max(0, Math.min(20, options.limitPerPage ?? Math.min(3, page.detail_limit))),
+      rank: options.rank,
+      delayMs: options.delayMs,
+      // Every price is stored as soon as it is read, so the runtime does not
+      // throw the work away when it stops the background job.
+      onEnriched: async (item) => {
+        const parsed = listingSchema.safeParse(toListingInput(item, page));
+        if (parsed.success) await upsertListing(env, parsed.data, page.source_id, expiresAt, page.id);
+      },
+    });
+    for (const item of items) {
+      const input = toListingInput(item, page);
+      const parsed = listingSchema.safeParse(input);
+      if (!parsed.success) continue;
+      await upsertListing(env, parsed.data, page.source_id, expiresAt, page.id);
+    }
+    if ((enrichment.error ?? "").includes("429")) return;
+  }
 }

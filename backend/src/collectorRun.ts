@@ -4,16 +4,14 @@ import { fetchSourcePage, type FetchLike } from "./linkImport";
 import { upsertListing } from "./listingStore";
 import { listingSchema } from "./validation";
 import { checkSourcePermission, hostAllowlist, SOURCE_USER_LINK } from "./sources";
-import { listSourcePages, toListingInput, SOURCE_COLLECTOR, type SourcePageRow } from "./liveSearch";
+import { listSourcePages, toListingInput, SOURCE_COLLECTOR, DEFAULT_CACHE_TTL_MINUTES, type SourcePageRow } from "./liveSearch";
+import { enrichWithDetailPages } from "./detailEnrich";
 import type { Env } from "./types";
 
 export { SOURCE_COLLECTOR } from "./liveSearch";
 
 /** A category page carries many listings, so it needs a larger body budget than a single item page. */
 export const COLLECTOR_MAX_BYTES = 2 * 1024 * 1024;
-
-/** Pause between the requests the collector makes, so a source is never flooded. */
-export const DETAIL_DELAY_MS = 4000;
 
 /** Pause between two listing pages of the same run. */
 export const PAGE_DELAY_MS = 4000;
@@ -67,6 +65,9 @@ export async function runCollection(
   if (!permission.allowed) throw new Error(`${permission.code}: ${permission.message}`);
   const allowlist = hostAllowlist(permission.source);
   const fetchImpl = options.fetchImpl ?? ((input: string, init?: RequestInit) => fetch(input, init));
+  // The server keeps no listing data permanently: a collector run stores its
+  // findings the same short lived way a search does.
+  const expiresAt = options.expiresAt ?? new Date(Date.now() + DEFAULT_CACHE_TTL_MINUTES * 60_000).toISOString();
 
   const pages = await listSourcePages(env, sourceId);
   const limited = options.maxPages ? pages.slice(0, options.maxPages) : pages;
@@ -120,40 +121,15 @@ export async function runCollection(
     // configured to follow up, the item page is read as well, slowly and
     // within a strict budget, to obtain the full facts.
     if (page.follow_detail && items.length > 0) {
-      const limit = Math.max(0, Math.min(20, page.detail_limit));
-      // Listings that already carry a price are skipped, so the budget moves
-      // on to the next ones over the following runs instead of repeating the
-      // same pages.
-      const alreadyPriced = new Set<string>();
-      try {
-        const rows = await env.DB.prepare("SELECT source_listing_id FROM listings WHERE source = ? AND price > 0")
-          .bind(new URL(page.url).hostname.replace(/^www\./, "")).all<{ source_listing_id: string | null }>();
-        for (const row of rows.results) if (row.source_listing_id) alreadyPriced.add(String(row.source_listing_id));
-      } catch {
-        // The lookup is an optimisation; the run continues without it.
-      }
-      const needsDetail = items
-        .filter((item) => !alreadyPriced.has(item.sourceListingId))
-        .sort((a, b) => Number(Boolean(a.price)) - Number(Boolean(b.price)));
-      for (const item of needsDetail.slice(0, limit)) {
-        await sleep(DETAIL_DELAY_MS);
-        result.details++;
-        const detail = await fetchSourcePage(item.url, allowlist, fetchImpl, COLLECTOR_MAX_BYTES);
-        if ("error" in detail) continue;
-        const extracted = extractListingFromHtml(detail.html, detail.finalUrl);
-        if (!extracted) continue;
-        item.price = extracted.price ?? item.price;
-        item.monthlyRent = extracted.monthlyRent ?? item.monthlyRent;
-        item.deposit = extracted.deposit ?? item.deposit;
-        item.areaM2 = extracted.areaM2 ?? item.areaM2;
-        item.bedrooms = extracted.bedrooms ?? item.bedrooms;
-        item.propertyType = extracted.propertyType ?? item.propertyType;
-        item.city = extracted.city ?? item.city;
-        item.neighborhood = extracted.neighborhood ?? item.neighborhood;
-        item.description = extracted.description;
-        item.features = extracted.features.length ? extracted.features : item.features;
-        result.detailsEnriched++;
-      }
+      const enrichment = await enrichWithDetailPages(env, items, {
+        pageId: page.id,
+        sourceHost: new URL(page.url).hostname.replace(/^www\./, ""),
+        allowlist,
+        fetchImpl,
+        limit: Math.max(0, Math.min(20, page.detail_limit)),
+      });
+      result.details = enrichment.attempted;
+      result.detailsEnriched = enrichment.enriched;
     }
 
     for (const item of items) {
